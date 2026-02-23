@@ -21,6 +21,10 @@ pending_approvals = {}
 pending_selections = {}
 approval_message_map = {}
 
+# Maps escalation message SID → customer number
+# So when you reply to an escalation, we know who to forward to
+escalation_message_map = {}
+
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey"]
 
@@ -53,18 +57,17 @@ VAGUE_INTENT = [
     "si", "sí"
 ]
 
-# Keywords that indicate the customer wants a part, even with typos
 PART_KEYWORDS = [
     "pieza", "repuesto", "parte", "necesito", "neceisto", "nececito",
     "busco", "quiero", "tienen", "tienes", "hay ", "consiguen"
 ]
 
-# Customer wants a human
 HUMAN_REQUEST = [
     "con alguien", "hablar con", "un agente", "una persona", "con una persona",
     "con un humano", "con el dueño", "con el encargado", "me pueden llamar",
     "me pueden contactar", "quiero hablar", "necesito hablar", "llamenme",
-    "llámenme", "me llaman", "por favor alguien", "alguien me ayude"
+    "llámenme", "me llaman", "por favor alguien", "alguien me ayude",
+    "alguien que trabaje"
 ]
 
 
@@ -95,10 +98,8 @@ def is_thanks(message: str) -> bool:
 
 def is_vague_intent(message: str) -> bool:
     msg = message.lower().strip()
-    # Check phrase list first
     if any(msg.startswith(v) for v in VAGUE_INTENT):
         return True
-    # Also catch any message containing part-related keywords (handles typos)
     return any(keyword in msg for keyword in PART_KEYWORDS)
 
 
@@ -112,15 +113,21 @@ def process_customer_request(incoming_number: str, incoming_message: str):
 
     if not parsed:
         if is_human_request(incoming_message):
-            # Notify the store owner
             owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
             if owner_number:
-                send_whatsapp(
+                # Send escalation and capture the message SID
+                msg_sid = send_whatsapp(
                     owner_number,
                     f"⚠️ *Cliente pidió hablar con una persona*\n"
                     f"Número: {incoming_number.replace('whatsapp:', '')}\n"
-                    f"Mensaje: \"{incoming_message}\""
+                    f"Mensaje: \"{incoming_message}\"\n\n"
+                    f"_Responde a este mensaje para hablarle directamente al cliente._"
                 )
+                # Map the SID → customer number for reply forwarding
+                if msg_sid:
+                    escalation_message_map[msg_sid] = incoming_number
+                    print(f"📋 Escalation mapped: {msg_sid} → {incoming_number}")
+
             send_whatsapp(
                 incoming_number,
                 "Claro, en un momento te contacta alguien del equipo. 👍\n\n"
@@ -235,9 +242,22 @@ def webhook():
 
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
-    # 1. YOUR PERSONAL NUMBER → Approval flow
+    # 1. YOUR PERSONAL NUMBER → Approval or reply-forwarding flow
     if incoming_number == os.getenv("YOUR_PERSONAL_WHATSAPP"):
         replied_to_sid = request.form.get("OriginalRepliedMessageSid", None)
+
+        # Check if this is a reply to an escalation notification
+        if replied_to_sid and replied_to_sid in escalation_message_map:
+            customer_number = escalation_message_map[replied_to_sid]
+            send_whatsapp(
+                customer_number,
+                f"💬 *AutoParts Santiago:*\n{incoming_message}"
+            )
+            print(f"📤 Forwarded owner reply to {customer_number}: {incoming_message}")
+            response.message("✅ Mensaje enviado al cliente.")
+            return str(response)
+
+        # Otherwise handle as normal approval
         result = handle_approval(
             incoming_message,
             pending_approvals,

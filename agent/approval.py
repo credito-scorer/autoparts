@@ -10,12 +10,18 @@ twilio_client = Client(
     os.getenv("TWILIO_AUTH_TOKEN")
 )
 
-def send_whatsapp(to: str, message: str):
-    twilio_client.messages.create(
-        body=message,
-        from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-        to=to
-    )
+def send_whatsapp(to: str, message: str) -> str | None:
+    """Send a WhatsApp message and return the message SID."""
+    try:
+        msg = twilio_client.messages.create(
+            body=message,
+            from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
+            to=to
+        )
+        return msg.sid
+    except Exception as e:
+        print(f"❌ Failed to send WhatsApp to {to}: {e}")
+        return None
 
 def send_for_approval(options: list, parsed: dict,
                       customer_number: str, pending_approvals: dict,
