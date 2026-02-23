@@ -21,17 +21,41 @@ pending_approvals = {}
 pending_selections = {}
 approval_message_map = {}
 
+GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes", 
+             "buenas noches", "hi", "hello", "hey", "que tal", "qué tal"]
+
+def is_greeting(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(msg.startswith(g) for g in GREETINGS)
+
 def process_customer_request(incoming_number: str, incoming_message: str):
     parsed = parse_request(incoming_message)
 
     if not parsed:
-        send_whatsapp(
-            incoming_number,
-            "No pude entender tu solicitud. 🙏\n\n"
-            "Por favor envía la pieza, marca, modelo y año.\n"
-            "Ejemplo: *alternador Toyota Hilux 2008*"
-        )
+        if is_greeting(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "👋 Hola! Somos *AutoParts Santiago*.\n\n"
+                "Encuentra cualquier repuesto sin salir de tu taller. "
+                "Solo envíanos la pieza, marca, modelo y año.\n\n"
+                "Ejemplo: *alternador Toyota Hilux 2008*"
+            )
+        else:
+            send_whatsapp(
+                incoming_number,
+                "No entendí tu mensaje. 🙏\n\n"
+                "Para buscar un repuesto envíanos:\n"
+                "Pieza + marca + modelo + año\n\n"
+                "Ejemplo: *filtro de aceite Corolla 2015*"
+            )
         return
+
+    # It's a real part request — acknowledge now
+    send_whatsapp(
+        incoming_number,
+        "🔩 *Recibido!*\n"
+        "Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
+    )
 
     log_request({
         "customer_number": incoming_number,
@@ -91,7 +115,6 @@ def webhook():
     # 1. YOUR PERSONAL NUMBER → Approval flow
     if incoming_number == os.getenv("YOUR_PERSONAL_WHATSAPP"):
         replied_to_sid = request.form.get("OriginalRepliedMessageSid", None)
-        print(f"REPLIED TO SID: {replied_to_sid}")
         result = handle_approval(
             incoming_message,
             pending_approvals,
@@ -164,12 +187,7 @@ def webhook():
 
             return str(response)
 
-    # 4. NEW CUSTOMER REQUEST
-    response.message(
-        "🔩 *Recibido!*\n"
-        "Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
-    )
-
+    # 4. ALL OTHER MESSAGES → process in background
     thread = threading.Thread(
         target=process_customer_request,
         args=(incoming_number, incoming_message)
