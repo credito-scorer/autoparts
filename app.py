@@ -21,12 +21,49 @@ pending_approvals = {}
 pending_selections = {}
 approval_message_map = {}
 
-GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes", 
+GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey", "que tal", "qué tal"]
+
+# Messages that mean "give me a second" — acknowledge without repeating instructions
+WAIT_PHRASES = [
+    "dame un segundo", "un momento", "un seg", "espera", "espérate",
+    "ahorita te digo", "ahorita", "déjame revisar", "dejame revisar",
+    "déjame ver", "dejame ver", "ya vuelvo", "un momentito"
+]
+
+# Short acknowledgments — just confirm you're listening
+ACK_PHRASES = [
+    "ok", "okey", "okay", "entendido", "perfecto", "listo", "bueno",
+    "ah ok", "ah okey", "ya veo", "ya", "claro", "dale", "va",
+    "de acuerdo", "10 puntos", "excelente", "genial"
+]
+
+# Thank you messages
+THANKS_PHRASES = [
+    "gracias", "muchas gracias", "mil gracias", "ok gracias",
+    "okey gracias", "gracias!", "gracias!!", "ty", "thanks"
+]
+
 
 def is_greeting(message: str) -> bool:
     msg = message.lower().strip()
     return any(msg.startswith(g) for g in GREETINGS)
+
+
+def is_wait(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(msg.startswith(w) for w in WAIT_PHRASES)
+
+
+def is_ack(message: str) -> bool:
+    msg = message.lower().strip()
+    return msg in ACK_PHRASES
+
+
+def is_thanks(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(msg.startswith(t) for t in THANKS_PHRASES)
+
 
 def process_customer_request(incoming_number: str, incoming_message: str):
     parsed = parse_request(incoming_message)
@@ -39,6 +76,21 @@ def process_customer_request(incoming_number: str, incoming_message: str):
                 "Encuentra cualquier repuesto sin salir de tu taller. "
                 "Solo envíanos la pieza, marca, modelo y año.\n\n"
                 "Ejemplo: *alternador Toyota Hilux 2008*"
+            )
+        elif is_wait(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "Claro, tómate tu tiempo. Aquí estoy cuando estés listo. 👍"
+            )
+        elif is_ack(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "Perfecto. 😊 ¿Hay algo más en que te pueda ayudar?"
+            )
+        elif is_thanks(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "¡Con gusto! Si necesitas algo más, aquí estamos. 👋"
             )
         else:
             send_whatsapp(
