@@ -284,6 +284,23 @@ def webhook():
             response.message("✅ Mensaje enviado al cliente.")
             return str(response)
 
+        # Check for manual live session command: "tomar +56912345678"
+        if incoming_message.lower().startswith("tomar "):
+            parts = incoming_message.strip().split()
+            raw_number = parts[1] if len(parts) > 1 else ""
+            if not raw_number.startswith("+"):
+                raw_number = "+" + raw_number
+            customer_number = f"whatsapp:{raw_number}"
+            live_sessions[customer_number] = True
+            send_whatsapp(
+                customer_number,
+                "Hola, alguien del equipo de AutoParts Santiago se pondrá en "
+                "contacto contigo en un momento. 👋"
+            )
+            print(f"🔴 Manual live session started for {customer_number}")
+            response.message(f"🔴 Sesión en vivo iniciada con {raw_number}.")
+            return str(response)
+
         # Otherwise handle as normal approval
         result = handle_approval(
             incoming_message,
