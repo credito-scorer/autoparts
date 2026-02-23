@@ -24,7 +24,6 @@ approval_message_map = {}
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey"]
 
-# "que tal" and similar are secondary greetings — respond warmly but briefly
 SECONDARY_GREETINGS = ["que tal", "qué tal", "como estas", "cómo estás",
                        "como estás", "cómo estas", "todo bien", "que hay"]
 
@@ -54,7 +53,13 @@ VAGUE_INTENT = [
     "si", "sí"
 ]
 
-# Customer wants to talk to a human
+# Keywords that indicate the customer wants a part, even with typos
+PART_KEYWORDS = [
+    "pieza", "repuesto", "parte", "necesito", "neceisto", "nececito",
+    "busco", "quiero", "tienen", "tienes", "hay ", "consiguen"
+]
+
+# Customer wants a human
 HUMAN_REQUEST = [
     "con alguien", "hablar con", "un agente", "una persona", "con una persona",
     "con un humano", "con el dueño", "con el encargado", "me pueden llamar",
@@ -90,7 +95,11 @@ def is_thanks(message: str) -> bool:
 
 def is_vague_intent(message: str) -> bool:
     msg = message.lower().strip()
-    return any(msg.startswith(v) for v in VAGUE_INTENT)
+    # Check phrase list first
+    if any(msg.startswith(v) for v in VAGUE_INTENT):
+        return True
+    # Also catch any message containing part-related keywords (handles typos)
+    return any(keyword in msg for keyword in PART_KEYWORDS)
 
 
 def is_human_request(message: str) -> bool:
@@ -104,12 +113,14 @@ def process_customer_request(incoming_number: str, incoming_message: str):
     if not parsed:
         if is_human_request(incoming_message):
             # Notify the store owner
-            send_whatsapp(
-                os.getenv("YOUR_PERSONAL_WHATSAPP"),
-                f"⚠️ *Cliente pidió hablar con una persona*\n"
-                f"Número: {incoming_number.replace('whatsapp:', '')}\n"
-                f"Mensaje: \"{incoming_message}\""
-            )
+            owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
+            if owner_number:
+                send_whatsapp(
+                    owner_number,
+                    f"⚠️ *Cliente pidió hablar con una persona*\n"
+                    f"Número: {incoming_number.replace('whatsapp:', '')}\n"
+                    f"Mensaje: \"{incoming_message}\""
+                )
             send_whatsapp(
                 incoming_number,
                 "Claro, en un momento te contacta alguien del equipo. 👍\n\n"
