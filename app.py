@@ -24,24 +24,28 @@ approval_message_map = {}
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey", "que tal", "qué tal"]
 
-# Messages that mean "give me a second" — acknowledge without repeating instructions
 WAIT_PHRASES = [
     "dame un segundo", "un momento", "un seg", "espera", "espérate",
     "ahorita te digo", "ahorita", "déjame revisar", "dejame revisar",
     "déjame ver", "dejame ver", "ya vuelvo", "un momentito"
 ]
 
-# Short acknowledgments — just confirm you're listening
 ACK_PHRASES = [
     "ok", "okey", "okay", "entendido", "perfecto", "listo", "bueno",
     "ah ok", "ah okey", "ya veo", "ya", "claro", "dale", "va",
     "de acuerdo", "10 puntos", "excelente", "genial"
 ]
 
-# Thank you messages
 THANKS_PHRASES = [
     "gracias", "muchas gracias", "mil gracias", "ok gracias",
     "okey gracias", "gracias!", "gracias!!", "ty", "thanks"
+]
+
+VAGUE_INTENT = [
+    "si necesito", "sí necesito", "necesito unas", "necesito algo",
+    "busco unas", "quiero unas", "tengo que buscar", "necesito piezas",
+    "necesito repuestos", "necesito varios", "si tengo", "sí tengo",
+    "tengo varios", "tengo unas", "si", "sí"
 ]
 
 
@@ -63,6 +67,11 @@ def is_ack(message: str) -> bool:
 def is_thanks(message: str) -> bool:
     msg = message.lower().strip()
     return any(msg.startswith(t) for t in THANKS_PHRASES)
+
+
+def is_vague_intent(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(msg.startswith(v) for v in VAGUE_INTENT)
 
 
 def process_customer_request(incoming_number: str, incoming_message: str):
@@ -91,6 +100,14 @@ def process_customer_request(incoming_number: str, incoming_message: str):
             send_whatsapp(
                 incoming_number,
                 "¡Con gusto! Si necesitas algo más, aquí estamos. 👋"
+            )
+        elif is_vague_intent(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "Con gusto te ayudo. 🔧\n\n"
+                "Dime qué pieza necesitas y para qué vehículo:\n"
+                "Pieza + marca + modelo + año\n\n"
+                "Ejemplo: *filtro de aceite Corolla 2015*"
             )
         else:
             send_whatsapp(
