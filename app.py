@@ -22,7 +22,11 @@ pending_selections = {}
 approval_message_map = {}
 
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
-             "buenas noches", "hi", "hello", "hey", "que tal", "qué tal"]
+             "buenas noches", "hi", "hello", "hey"]
+
+# "que tal" and similar are secondary greetings — respond warmly but briefly
+SECONDARY_GREETINGS = ["que tal", "qué tal", "como estas", "cómo estás",
+                       "como estás", "cómo estas", "todo bien", "que hay"]
 
 WAIT_PHRASES = [
     "dame un segundo", "un momento", "un seg", "espera", "espérate",
@@ -43,15 +47,30 @@ THANKS_PHRASES = [
 
 VAGUE_INTENT = [
     "si necesito", "sí necesito", "necesito unas", "necesito algo",
-    "busco unas", "quiero unas", "tengo que buscar", "necesito piezas",
-    "necesito repuestos", "necesito varios", "si tengo", "sí tengo",
-    "tengo varios", "tengo unas", "si", "sí"
+    "busco unas", "quiero unas", "quiero una", "quiero un",
+    "tengo que buscar", "necesito piezas", "necesito repuestos",
+    "necesito varios", "si tengo", "sí tengo", "tengo varios",
+    "tengo unas", "no entiendo", "no sé cómo", "no se como",
+    "si", "sí"
+]
+
+# Customer wants to talk to a human
+HUMAN_REQUEST = [
+    "con alguien", "hablar con", "un agente", "una persona", "con una persona",
+    "con un humano", "con el dueño", "con el encargado", "me pueden llamar",
+    "me pueden contactar", "quiero hablar", "necesito hablar", "llamenme",
+    "llámenme", "me llaman", "por favor alguien", "alguien me ayude"
 ]
 
 
 def is_greeting(message: str) -> bool:
     msg = message.lower().strip()
     return any(msg.startswith(g) for g in GREETINGS)
+
+
+def is_secondary_greeting(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(msg.startswith(g) for g in SECONDARY_GREETINGS)
 
 
 def is_wait(message: str) -> bool:
@@ -74,17 +93,41 @@ def is_vague_intent(message: str) -> bool:
     return any(msg.startswith(v) for v in VAGUE_INTENT)
 
 
+def is_human_request(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(phrase in msg for phrase in HUMAN_REQUEST)
+
+
 def process_customer_request(incoming_number: str, incoming_message: str):
     parsed = parse_request(incoming_message)
 
     if not parsed:
-        if is_greeting(incoming_message):
+        if is_human_request(incoming_message):
+            # Notify the store owner
+            send_whatsapp(
+                os.getenv("YOUR_PERSONAL_WHATSAPP"),
+                f"⚠️ *Cliente pidió hablar con una persona*\n"
+                f"Número: {incoming_number.replace('whatsapp:', '')}\n"
+                f"Mensaje: \"{incoming_message}\""
+            )
+            send_whatsapp(
+                incoming_number,
+                "Claro, en un momento te contacta alguien del equipo. 👍\n\n"
+                "Si mientras tanto quieres buscar una pieza, solo envíanos:\n"
+                "Pieza + marca + modelo + año"
+            )
+        elif is_greeting(incoming_message):
             send_whatsapp(
                 incoming_number,
                 "👋 Hola! Somos *AutoParts Santiago*.\n\n"
                 "Encuentra cualquier repuesto sin salir de tu taller. "
                 "Solo envíanos la pieza, marca, modelo y año.\n\n"
                 "Ejemplo: *alternador Toyota Hilux 2008*"
+            )
+        elif is_secondary_greeting(incoming_message):
+            send_whatsapp(
+                incoming_number,
+                "¡Todo bien! ¿En qué te puedo ayudar hoy? 😊"
             )
         elif is_wait(incoming_message):
             send_whatsapp(
