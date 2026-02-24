@@ -42,17 +42,21 @@ No incluyas explicaciones, solo el JSON."""
     
     raw = response.content[0].text.strip()
     
-    if raw == "null":
-        return None
-        
     # Clean markdown if Claude wrapped it in ```json
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    
-    parsed = json.loads(raw.strip())
-    return parsed
+
+    raw = raw.strip()
+
+    if not raw or raw == "null":
+        return None
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
 
 if __name__ == "__main__":
     # Quick test
