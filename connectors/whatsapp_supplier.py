@@ -1,17 +1,35 @@
 import os
 import json
 import time
-from twilio.rest import Client
+import requests
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
 client = Anthropic()
-twilio_client = Client(
-    os.getenv("TWILIO_ACCOUNT_SID"),
-    os.getenv("TWILIO_AUTH_TOKEN")
-)
+
+PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "1016895944841092")
+API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
+
+
+def _send_whatsapp(to: str, message: str) -> None:
+    number = to.replace("whatsapp:", "").replace("+", "")
+    headers = {
+        "Authorization": f"Bearer {os.getenv('META_ACCESS_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number,
+        "type": "text",
+        "text": {"body": message}
+    }
+    try:
+        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"❌ Failed to send WhatsApp to {to}: {e}")
 
 # In-memory store for pending supplier responses
 # Format: {supplier_number: {"parsed": parsed, "timestamp": time, "response": None}}
@@ -45,11 +63,7 @@ def query_whatsapp_supplier(supplier: dict, parsed: dict) -> dict | None:
     message += f"\n¿Tienen disponible? ¿Precio y tiempo de entrega a Santiago?"
     
     try:
-        twilio_client.messages.create(
-            body=message,
-            from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            to=supplier["number"]
-        )
+        _send_whatsapp(supplier["number"], message)
         
         # Register as pending
         pending_supplier_queries[supplier["number"]] = {
@@ -167,7 +181,7 @@ if __name__ == "__main__":
                    "lo tenemos en stock, entrega a Santiago mañana."
     
     # Simulate a pending query
-    pending_supplier_queries["whatsapp:+50712345678"] = {
+    pending_supplier_queries["+50712345678"] = {
         "supplier_name": "Distribuidora Test PTY",
         "parsed": {
             "part": "Alternador",
@@ -181,7 +195,7 @@ if __name__ == "__main__":
     }
     
     print("Testing supplier response parser...")
-    result = handle_supplier_response("whatsapp:+50712345678", test_response)
+    result = handle_supplier_response("+50712345678", test_response)
     
     if result:
         print(f"✅ Parsed response:")
