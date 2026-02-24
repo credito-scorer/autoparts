@@ -245,7 +245,7 @@ def webhook_verify():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode == "subscribe" and token == os.getenv("WHATSAPP_VERIFY_TOKEN"):
+    if mode == "subscribe" and token == os.getenv("META_VERIFY_TOKEN"):
         print("✅ Webhook verified by Meta")
         return challenge, 200
     return "Forbidden", 403

@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "1016895944841092")
+PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "1016895944841092")
 API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
 
 
@@ -15,7 +15,7 @@ def send_whatsapp(to: str, message: str) -> str | None:
     number = to.replace("whatsapp:", "").replace("+", "")
 
     headers = {
-        "Authorization": f"Bearer {os.getenv('WHATSAPP_ACCESS_TOKEN')}",
+        "Authorization": f"Bearer {os.getenv('META_ACCESS_TOKEN')}",
         "Content-Type": "application/json"
     }
     payload = {
