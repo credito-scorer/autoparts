@@ -154,7 +154,7 @@ def get_registered_suppliers() -> list:
         if len(parts) == 3:
             suppliers.append({
                 "name": parts[0],
-                "number": f"whatsapp:{parts[1]}",
+                "number": parts[1],
                 "lead_time": parts[2]
             })
     

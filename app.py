@@ -1,7 +1,6 @@
 import os
 import threading
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from agent.parser import parse_request
 from agent.sourcing import source_parts
@@ -21,8 +20,7 @@ pending_approvals = {}
 pending_selections = {}
 approval_message_map = {}
 
-# Maps escalation message SID → customer number
-# So when you reply to an escalation, we know who to forward to
+# Maps message ID → customer number for reply forwarding
 escalation_message_map = {}
 
 # Customers currently in a live session (bot is paused for them)
@@ -122,16 +120,14 @@ def process_customer_request(incoming_number: str, incoming_message: str):
 
             owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
             if owner_number:
-                # Send escalation and capture the message SID
                 msg_sid = send_whatsapp(
                     owner_number,
                     f"🔴 *Sesión en vivo iniciada*\n"
-                    f"Cliente: {incoming_number.replace('whatsapp:', '')}\n"
+                    f"Cliente: {incoming_number}\n"
                     f"Mensaje: \"{incoming_message}\"\n\n"
                     f"_Responde a este mensaje para hablarle directamente. "
                     f"Escribe *fin* para terminar la sesión y devolver el control al bot._"
                 )
-                # Map the SID → customer number for reply forwarding
                 if msg_sid:
                     escalation_message_map[msg_sid] = incoming_number
                     print(f"📋 Live session mapped: {msg_sid} → {incoming_number}")
@@ -242,24 +238,56 @@ def process_customer_request(incoming_number: str, incoming_message: str):
     })
 
 
+@app.route("/webhook", methods=["GET"])
+def webhook_verify():
+    """Meta webhook verification handshake."""
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == os.getenv("WHATSAPP_VERIFY_TOKEN"):
+        print("✅ Webhook verified by Meta")
+        return challenge, 200
+    return "Forbidden", 403
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_number = request.form.get("From")
-    incoming_message = request.form.get("Body", "").strip()
-    response = MessagingResponse()
+    data = request.get_json()
+
+    # Parse Meta's nested webhook structure
+    try:
+        value = data["entry"][0]["changes"][0]["value"]
+    except (KeyError, IndexError, TypeError):
+        return jsonify({"status": "ok"}), 200
+
+    # Skip status updates (delivered, read, sent, etc.)
+    if "messages" not in value:
+        return jsonify({"status": "ok"}), 200
+
+    message = value["messages"][0]
+
+    # Only handle text messages
+    if message.get("type") != "text":
+        return jsonify({"status": "ok"}), 200
+
+    # Meta sends numbers without + (e.g. 56912345678) — normalize to +56912345678
+    incoming_number = "+" + message["from"]
+    incoming_message = message.get("text", {}).get("body", "").strip()
+    replied_to_sid = message.get("context", {}).get("id")
 
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
-    # 1. YOUR PERSONAL NUMBER → Approval or reply-forwarding flow
-    if incoming_number == os.getenv("YOUR_PERSONAL_WHATSAPP"):
-        replied_to_sid = request.form.get("OriginalRepliedMessageSid", None)
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
 
-        # Check if this is a reply to a live session / escalation message
+    # 1. OWNER → Approval or reply-forwarding flow
+    if incoming_number == owner_number:
+
+        # Reply to a live session / escalation message
         if replied_to_sid and replied_to_sid in escalation_message_map:
             customer_number = escalation_message_map[replied_to_sid]
 
             if incoming_message.strip().lower() == "fin":
-                # End live session — hand control back to the bot
                 live_sessions.pop(customer_number, None)
                 send_whatsapp(
                     customer_number,
@@ -268,40 +296,33 @@ def webhook():
                     "Para buscar un repuesto escríbenos:\n"
                     "Pieza + marca + modelo + año"
                 )
-                display = customer_number.replace("whatsapp:", "")
                 print(f"🟢 Live session ended for {customer_number}")
-                response.message(f"✅ Sesión terminada. Bot activo para {display}.")
-                return str(response)
+                send_whatsapp(owner_number, f"✅ Sesión terminada. Bot activo para {customer_number}.")
+                return jsonify({"status": "ok"}), 200
 
-            # Forward owner's message to customer and keep session alive
-            send_whatsapp(
-                customer_number,
-                f"💬 *AutoParts Santiago:*\n{incoming_message}"
-            )
-            # Track this new message SID so the owner can keep replying
+            send_whatsapp(customer_number, f"💬 *AutoParts Santiago:*\n{incoming_message}")
             escalation_message_map.pop(replied_to_sid, None)
             print(f"📤 Forwarded owner reply to {customer_number}: {incoming_message}")
-            response.message("✅ Mensaje enviado al cliente.")
-            return str(response)
+            send_whatsapp(owner_number, "✅ Mensaje enviado al cliente.")
+            return jsonify({"status": "ok"}), 200
 
-        # Check for manual live session command: "tomar +56912345678"
+        # Manual live session command: "tomar +56912345678"
         if incoming_message.lower().startswith("tomar "):
             parts = incoming_message.strip().split()
             raw_number = parts[1] if len(parts) > 1 else ""
             if not raw_number.startswith("+"):
                 raw_number = "+" + raw_number
-            customer_number = f"whatsapp:{raw_number}"
-            live_sessions[customer_number] = True
+            live_sessions[raw_number] = True
             send_whatsapp(
-                customer_number,
+                raw_number,
                 "Hola, alguien del equipo de AutoParts Santiago se pondrá en "
                 "contacto contigo en un momento. 👋"
             )
-            print(f"🔴 Manual live session started for {customer_number}")
-            response.message(f"🔴 Sesión en vivo iniciada con {raw_number}.")
-            return str(response)
+            print(f"🔴 Manual live session started for {raw_number}")
+            send_whatsapp(owner_number, f"🔴 Sesión en vivo iniciada con {raw_number}.")
+            return jsonify({"status": "ok"}), 200
 
-        # Otherwise handle as normal approval
+        # Normal approval handling
         result = handle_approval(
             incoming_message,
             pending_approvals,
@@ -309,10 +330,10 @@ def webhook():
             approval_message_map,
             replied_to_sid
         )
-        response.message(result)
-        return str(response)
+        send_whatsapp(owner_number, result)
+        return jsonify({"status": "ok"}), 200
 
-    # 2. WHATSAPP SUPPLIER → Supplier response flow
+    # 2. SUPPLIER → Supplier response flow
     registered_suppliers = get_registered_suppliers()
     supplier_numbers = [s["number"] for s in registered_suppliers]
 
@@ -320,21 +341,19 @@ def webhook():
         result = handle_supplier_response(incoming_number, incoming_message)
         if result:
             print(f"✅ Supplier response: {result['supplier_name']}")
-        return str(response)
+        return jsonify({"status": "ok"}), 200
 
-    # 3. CUSTOMER IN LIVE SESSION → forward to owner, skip the bot
+    # 3. LIVE SESSION → forward to owner, skip the bot
     if incoming_number in live_sessions:
-        owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
         if owner_number:
-            display = incoming_number.replace("whatsapp:", "")
             msg_sid = send_whatsapp(
                 owner_number,
-                f"💬 *{display}:*\n{incoming_message}"
+                f"💬 *{incoming_number}:*\n{incoming_message}"
             )
             if msg_sid:
                 escalation_message_map[msg_sid] = incoming_number
                 print(f"📨 Forwarded live message from {incoming_number} → owner")
-        return str(response)
+        return jsonify({"status": "ok"}), 200
 
     # 4. CUSTOMER SELECTING AN OPTION
     if incoming_number in pending_selections:
@@ -361,7 +380,7 @@ def webhook():
                 )
 
                 send_whatsapp(
-                    os.getenv("YOUR_PERSONAL_WHATSAPP"),
+                    owner_number,
                     f"🎯 *Cliente confirmó opción {choice + 1}*\n"
                     f"Pieza: {parsed.get('part')} "
                     f"{parsed.get('make')} {parsed.get('model')} "
@@ -369,7 +388,7 @@ def webhook():
                     f"Precio: ${price}\n"
                     f"Proveedor: {chosen['supplier_name']}\n"
                     f"Entrega: {chosen['lead_time']}\n"
-                    f"Cliente: {incoming_number.replace('whatsapp:', '')}"
+                    f"Cliente: {incoming_number}"
                 )
 
                 log_request({
@@ -384,9 +403,9 @@ def webhook():
 
                 del pending_selections[incoming_number]
             else:
-                response.message("Por favor responde con 1, 2 o 3.")
+                send_whatsapp(incoming_number, "Por favor responde con 1, 2 o 3.")
 
-            return str(response)
+        return jsonify({"status": "ok"}), 200
 
     # 5. ALL OTHER MESSAGES → process in background
     thread = threading.Thread(
@@ -396,7 +415,7 @@ def webhook():
     thread.daemon = True
     thread.start()
 
-    return str(response)
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/health", methods=["GET"])

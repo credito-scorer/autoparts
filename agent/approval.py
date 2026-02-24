@@ -1,27 +1,39 @@
 import os
-from twilio.rest import Client
+import requests
 from agent.recommender import format_approval_message, format_customer_quote
 from dotenv import load_dotenv
 
 load_dotenv()
 
-twilio_client = Client(
-    os.getenv("TWILIO_ACCOUNT_SID"),
-    os.getenv("TWILIO_AUTH_TOKEN")
-)
+PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "1016895944841092")
+API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
+
 
 def send_whatsapp(to: str, message: str) -> str | None:
-    """Send a WhatsApp message and return the message SID."""
+    """Send a WhatsApp message via Meta Cloud API and return the message ID."""
+    # Strip whatsapp: prefix and + so we get a plain international number
+    number = to.replace("whatsapp:", "").replace("+", "")
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('WHATSAPP_ACCESS_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number,
+        "type": "text",
+        "text": {"body": message}
+    }
+
     try:
-        msg = twilio_client.messages.create(
-            body=message,
-            from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            to=to
-        )
-        return msg.sid
+        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+        msg_id = resp.json()["messages"][0]["id"]
+        return msg_id
     except Exception as e:
         print(f"❌ Failed to send WhatsApp to {to}: {e}")
         return None
+
 
 def send_for_approval(options: list, parsed: dict,
                       customer_number: str, pending_approvals: dict,
@@ -40,6 +52,7 @@ def send_for_approval(options: list, parsed: dict,
 
     send_whatsapp(os.getenv("YOUR_PERSONAL_WHATSAPP"), approval_message)
     print(f"✅ Approval request sent to your WhatsApp")
+
 
 def handle_approval(message: str, pending_approvals: dict,
                     pending_selections: dict,
@@ -69,7 +82,7 @@ def handle_approval(message: str, pending_approvals: dict,
             "O escribe *cancelar* para cancelar."
         )
 
-    # Match by WhatsApp reply-to first
+    # Match by reply-to first
     matched_customer = None
     if replied_to and approval_message_map:
         matched_customer = approval_message_map.get(replied_to)
