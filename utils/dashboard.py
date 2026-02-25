@@ -104,6 +104,7 @@ def render_dashboard() -> str:
         row_html += (
             f'<tr data-customer="{customer}">'
             f'<td style="white-space:nowrap;color:#888;font-size:0.8rem">{g(row,0)}</td>'
+            f'<td style="white-space:nowrap;font-weight:600;font-size:0.82rem">{customer}</td>'
             f'<td style="max-width:220px;word-break:break-word;font-style:italic;color:#555">"{g(row,1)}"</td>'
             f'<td><b>{g(row,3) or "—"}</b></td>'
             f'<td>{vehicle}</td>'
@@ -204,6 +205,7 @@ def render_dashboard() -> str:
                 <thead>
                     <tr>
                         <th>Fecha</th>
+                        <th>Cliente</th>
                         <th>Mensaje</th>
                         <th>Pieza</th>
                         <th>Vehículo</th>
