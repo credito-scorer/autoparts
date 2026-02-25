@@ -58,6 +58,30 @@ No incluyas explicaciones, solo el JSON."""
     except json.JSONDecodeError:
         return None
 
+def detect_needs_human(message: str) -> bool:
+    """
+    Uses Claude to detect if a customer is frustrated, confused,
+    lost, or would benefit from talking to a real person.
+    """
+    prompt = f"""Un cliente envió este mensaje a un bot de repuestos de autos:
+"{message}"
+
+¿El mensaje indica que el cliente está frustrado, molesto, confundido,
+perdido, no está recibiendo ayuda adecuada, o necesita hablar con una persona?
+
+Responde ÚNICAMENTE con true o false."""
+
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=5,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text.strip().lower() == "true"
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     # Quick test
     test_messages = [

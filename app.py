@@ -2,7 +2,7 @@ import os
 import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from agent.parser import parse_request
+from agent.parser import parse_request, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
@@ -25,6 +25,9 @@ escalation_message_map = {}
 
 # Customers currently in a live session (bot is paused for them)
 live_sessions = {}
+
+# Customers who were offered a live session and we're waiting for their confirmation
+pending_live_offers = {}
 
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey"]
@@ -173,6 +176,14 @@ def process_customer_request(incoming_number: str, incoming_message: str):
                 "Dime qué pieza necesitas y para qué vehículo:\n"
                 "Pieza + marca + modelo + año\n\n"
                 "Ejemplo: *filtro de aceite Corolla 2015*"
+            )
+        elif detect_needs_human(incoming_message):
+            pending_live_offers[incoming_number] = True
+            send_whatsapp(
+                incoming_number,
+                "Veo que quizás no te estoy ayudando como deberías. 🙏\n\n"
+                "¿Quieres hablar directamente con alguien del equipo?\n"
+                "Responde *sí* para conectarte."
             )
         else:
             send_whatsapp(
@@ -343,7 +354,38 @@ def webhook():
             print(f"✅ Supplier response: {result['supplier_name']}")
         return jsonify({"status": "ok"}), 200
 
-    # 3. LIVE SESSION → forward to owner, skip the bot
+    # 3. PENDING LIVE OFFER → customer responding to live session offer
+    if incoming_number in pending_live_offers:
+        pending_live_offers.pop(incoming_number)
+        affirmative = incoming_message.strip().lower() in [
+            "sí", "si", "yes", "dale", "ok", "okey", "sip", "claro", "bueno", "va"
+        ]
+        if affirmative:
+            live_sessions[incoming_number] = True
+            if owner_number:
+                msg_sid = send_whatsapp(
+                    owner_number,
+                    f"🔴 *Sesión en vivo iniciada*\n"
+                    f"Cliente: {incoming_number}\n\n"
+                    f"_El cliente aceptó conectarse con el equipo. "
+                    f"Escribe *fin* para terminar la sesión._"
+                )
+                if msg_sid:
+                    escalation_message_map[msg_sid] = incoming_number
+            send_whatsapp(
+                incoming_number,
+                "Perfecto, en un momento te contacta alguien del equipo. 👍"
+            )
+        else:
+            send_whatsapp(
+                incoming_number,
+                "Entendido. 😊 Si necesitas algo más, aquí estamos.\n\n"
+                "Para buscar un repuesto: Pieza + marca + modelo + año"
+            )
+        return jsonify({"status": "ok"}), 200
+
+    # 4. LIVE SESSION → forward to owner, skip the bot
+
     if incoming_number in live_sessions:
         if owner_number:
             msg_sid = send_whatsapp(
@@ -355,7 +397,7 @@ def webhook():
                 print(f"📨 Forwarded live message from {incoming_number} → owner")
         return jsonify({"status": "ok"}), 200
 
-    # 4. CUSTOMER SELECTING AN OPTION
+    # 5. CUSTOMER SELECTING AN OPTION
     if incoming_number in pending_selections:
         if incoming_message.strip() in ["1", "2", "3"]:
             pending = pending_selections.get(incoming_number)
@@ -407,7 +449,7 @@ def webhook():
 
         return jsonify({"status": "ok"}), 200
 
-    # 5. ALL OTHER MESSAGES → process in background
+    # 6. ALL OTHER MESSAGES → process in background
     thread = threading.Thread(
         target=process_customer_request,
         args=(incoming_number, incoming_message)
