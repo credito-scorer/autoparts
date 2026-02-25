@@ -517,7 +517,7 @@ def privacy():
 <header>
     <h1>AutoParts Santiago</h1>
     <p>Privacy Policy &nbsp;·&nbsp; Política de Privacidad</p>
-    <p style="margin-top:8px">Santiago, Chiriquí, Panama &nbsp;·&nbsp; Last updated: 2026</p>
+    <p style="margin-top:8px">Santiago, Veraguas, Panama &nbsp;·&nbsp; Last updated: 2026</p>
 </header>
 
 <div class="container">
@@ -554,7 +554,7 @@ def privacy():
         <h3>6. Contacto</h3>
         <div class="contact-box">
             <strong>AutoParts Santiago</strong>
-            Santiago, Chiriquí, Panamá<br>
+            Santiago, Veraguas, Panamá<br>
             <a href="mailto:ronelalmanza20@gmail.com">ronelalmanza20@gmail.com</a>
         </div>
     </div>
@@ -591,7 +591,7 @@ def privacy():
         <h3>6. Contact</h3>
         <div class="contact-box">
             <strong>AutoParts Santiago</strong>
-            Santiago, Chiriquí, Panama<br>
+            Santiago, Veraguas, Panama<br>
             <a href="mailto:ronelalmanza20@gmail.com">ronelalmanza20@gmail.com</a>
         </div>
     </div>
@@ -599,7 +599,7 @@ def privacy():
 </div>
 
 <footer>
-    &copy; 2026 AutoParts Santiago &nbsp;·&nbsp; Santiago, Chiriquí, Panama
+    &copy; 2026 AutoParts Santiago &nbsp;·&nbsp; Santiago, Veraguas, Panama
 </footer>
 
 </body>
