@@ -1,6 +1,6 @@
 import os
 import threading
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
 from agent.parser import parse_request, detect_needs_human
 from agent.sourcing import source_parts
@@ -469,8 +469,61 @@ def webhook():
 def dashboard():
     password = os.getenv("DASHBOARD_PASSWORD", "")
     if request.args.get("key") != password:
-        return make_response("Unauthorized", 401)
+        return redirect("/?failed=1", 302)
     return make_response(render_dashboard(), 200)
+
+
+@app.route("/", methods=["GET"])
+def index():
+    failed = request.args.get("failed")
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AutoParts Dashboard</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f0f2f5; display: flex; align-items: center;
+            justify-content: center; height: 100vh;
+        }}
+        .card {{
+            background: white; border-radius: 14px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.1);
+            padding: 40px; width: 100%; max-width: 360px; text-align: center;
+        }}
+        h1 {{ font-size: 1.3rem; color: #1a1a2e; margin-bottom: 6px; }}
+        p {{ color: #888; font-size: 0.85rem; margin-bottom: 24px; }}
+        input {{
+            width: 100%; padding: 12px 14px; border: 1px solid #ddd;
+            border-radius: 8px; font-size: 0.95rem; outline: none;
+            margin-bottom: 12px; transition: border .2s;
+        }}
+        input:focus {{ border-color: #1a1a2e; }}
+        button {{
+            width: 100%; padding: 12px; background: #1a1a2e; color: white;
+            border: none; border-radius: 8px; font-size: 0.95rem;
+            font-weight: 600; cursor: pointer; transition: opacity .2s;
+        }}
+        button:hover {{ opacity: 0.85; }}
+        .error {{ color: #c62828; font-size: 0.82rem; margin-bottom: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>📊 AutoParts Dashboard</h1>
+        <p>Ingresa tu contraseña para continuar</p>
+        {'<div class="error">Contraseña incorrecta. Intenta de nuevo.</div>' if failed else ''}
+        <form action="/dashboard" method="get">
+            <input type="password" name="key" placeholder="Contraseña" autofocus required>
+            <button type="submit">Entrar</button>
+        </form>
+    </div>
+</body>
+</html>"""
+    return make_response(html, 200)
 
 
 @app.route("/health", methods=["GET"])
