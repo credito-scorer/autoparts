@@ -290,10 +290,12 @@ def webhook():
 
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
-    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
+    owner_number = "+" + owner_number
+    incoming_normalized = incoming_number.replace("+", "").strip()
 
     # 1. OWNER → Approval or reply-forwarding flow
-    if incoming_number == owner_number:
+    if incoming_normalized == owner_number.replace("+", ""):
 
         # Reply to a live session / escalation message
         if replied_to_sid and replied_to_sid in escalation_message_map:
