@@ -1,12 +1,13 @@
 import os
 import threading
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from dotenv import load_dotenv
 from agent.parser import parse_request, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
 from utils.logger import log_request
+from utils.dashboard import render_dashboard
 from connectors.whatsapp_supplier import (
     handle_supplier_response,
     get_registered_suppliers
@@ -458,6 +459,14 @@ def webhook():
     thread.start()
 
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if request.args.get("key") != password:
+        return make_response("Unauthorized", 401)
+    return make_response(render_dashboard(), 200)
 
 
 @app.route("/health", methods=["GET"])
