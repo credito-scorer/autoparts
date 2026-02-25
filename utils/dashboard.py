@@ -36,7 +36,8 @@ def render_dashboard() -> str:
         sheet = get_order_log()
         rows = sheet.get_all_values()
     except Exception as e:
-        return f"<h2>Error reading sheet: {e}</h2>"
+        import traceback
+        return f"<h2>Error reading sheet: {e}</h2><pre>{traceback.format_exc()}</pre>"
 
     # Reverse so newest first, skip header row if present
     data = list(reversed(rows))
