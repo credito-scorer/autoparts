@@ -461,6 +461,152 @@ def webhook():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/privacy", methods=["GET"])
+def privacy():
+    html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy Policy — AutoParts Santiago</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f9f9f9; color: #333; line-height: 1.7;
+        }
+        header {
+            background: #1a1a2e; color: white;
+            padding: 40px 24px; text-align: center;
+        }
+        header h1 { font-size: 1.6rem; margin-bottom: 6px; }
+        header p { color: #aaa; font-size: 0.9rem; }
+        .container {
+            max-width: 800px; margin: 40px auto; padding: 0 24px 60px;
+        }
+        .lang-section {
+            background: white; border-radius: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,.08);
+            padding: 36px 40px; margin-bottom: 32px;
+        }
+        .lang-label {
+            display: inline-block; font-size: 0.75rem; font-weight: 700;
+            letter-spacing: .08em; text-transform: uppercase;
+            background: #1a1a2e; color: white;
+            padding: 3px 12px; border-radius: 20px; margin-bottom: 20px;
+        }
+        h2 { font-size: 1.3rem; margin-bottom: 20px; color: #1a1a2e; }
+        h3 { font-size: 1rem; font-weight: 700; margin: 24px 0 8px; color: #333; }
+        p { margin-bottom: 12px; font-size: 0.95rem; color: #444; }
+        ul { margin: 8px 0 12px 20px; }
+        li { margin-bottom: 6px; font-size: 0.95rem; color: #444; }
+        a { color: #1a1a2e; }
+        .contact-box {
+            background: #f0f2f5; border-radius: 8px;
+            padding: 16px 20px; margin-top: 24px; font-size: 0.9rem;
+        }
+        .contact-box strong { display: block; margin-bottom: 4px; }
+        footer {
+            text-align: center; color: #aaa;
+            font-size: 0.8rem; padding-bottom: 40px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>AutoParts Santiago</h1>
+    <p>Privacy Policy &nbsp;·&nbsp; Política de Privacidad</p>
+    <p style="margin-top:8px">Santiago, Chiriquí, Panama &nbsp;·&nbsp; Last updated: 2026</p>
+</header>
+
+<div class="container">
+
+    <!-- SPANISH -->
+    <div class="lang-section">
+        <span class="lang-label">Español</span>
+        <h2>Política de Privacidad</h2>
+
+        <h3>1. Información que recopilamos</h3>
+        <p>Cuando interactúas con nuestro asistente de WhatsApp, recopilamos:</p>
+        <ul>
+            <li>Tu número de teléfono de WhatsApp</li>
+            <li>El contenido de los mensajes que nos envías</li>
+        </ul>
+
+        <h3>2. Cómo usamos tu información</h3>
+        <p>La información recopilada se utiliza exclusivamente para:</p>
+        <ul>
+            <li>Procesar y responder a tus consultas de repuestos automotrices</li>
+            <li>Coordinarte con el equipo de AutoParts Santiago</li>
+            <li>Mejorar la calidad del servicio</li>
+        </ul>
+
+        <h3>3. Compartición de datos</h3>
+        <p>No vendemos, alquilamos ni compartimos tu información personal con terceros con fines comerciales. Los datos solo se comparten internamente con el equipo de AutoParts Santiago para atender tu solicitud.</p>
+
+        <h3>4. Almacenamiento y seguridad</h3>
+        <p>Tus datos se almacenan de forma segura y únicamente durante el tiempo necesario para completar tu solicitud. Aplicamos medidas razonables para proteger tu información contra accesos no autorizados.</p>
+
+        <h3>5. Tus derechos</h3>
+        <p>Tienes derecho a solicitar la eliminación de tus datos en cualquier momento. Para hacerlo, contáctanos por correo electrónico.</p>
+
+        <h3>6. Contacto</h3>
+        <div class="contact-box">
+            <strong>AutoParts Santiago</strong>
+            Santiago, Chiriquí, Panamá<br>
+            <a href="mailto:ronelalmanza20@gmail.com">ronelalmanza20@gmail.com</a>
+        </div>
+    </div>
+
+    <!-- ENGLISH -->
+    <div class="lang-section">
+        <span class="lang-label">English</span>
+        <h2>Privacy Policy</h2>
+
+        <h3>1. Information We Collect</h3>
+        <p>When you interact with our WhatsApp assistant, we collect:</p>
+        <ul>
+            <li>Your WhatsApp phone number</li>
+            <li>The content of messages you send us</li>
+        </ul>
+
+        <h3>2. How We Use Your Information</h3>
+        <p>The information collected is used exclusively to:</p>
+        <ul>
+            <li>Process and respond to your auto parts inquiries</li>
+            <li>Coordinate with the AutoParts Santiago team</li>
+            <li>Improve the quality of our service</li>
+        </ul>
+
+        <h3>3. Data Sharing</h3>
+        <p>We do not sell, rent, or share your personal information with third parties for commercial purposes. Data is only shared internally with the AutoParts Santiago team to fulfill your request.</p>
+
+        <h3>4. Storage & Security</h3>
+        <p>Your data is stored securely and only for as long as necessary to complete your request. We apply reasonable measures to protect your information against unauthorized access.</p>
+
+        <h3>5. Your Rights</h3>
+        <p>You have the right to request deletion of your data at any time. To do so, please contact us by email.</p>
+
+        <h3>6. Contact</h3>
+        <div class="contact-box">
+            <strong>AutoParts Santiago</strong>
+            Santiago, Chiriquí, Panama<br>
+            <a href="mailto:ronelalmanza20@gmail.com">ronelalmanza20@gmail.com</a>
+        </div>
+    </div>
+
+</div>
+
+<footer>
+    &copy; 2026 AutoParts Santiago &nbsp;·&nbsp; Santiago, Chiriquí, Panama
+</footer>
+
+</body>
+</html>"""
+    return make_response(html, 200)
+
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     password = os.getenv("DASHBOARD_PASSWORD", "")
