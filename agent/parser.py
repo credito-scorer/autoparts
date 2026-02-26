@@ -103,6 +103,59 @@ def extract_partial(message: str, known: dict) -> dict | None:
         return None
 
 
+_AFFIRMATIONS = {
+    "sí", "si", "dale", "ok", "okey", "ese", "ese mismo", "ese está bien",
+    "ese me sirve", "ese jale", "ese ta bien", "ese tá bien", "ese pues",
+    "bueno", "perfecto", "listo", "claro", "va", "yes", "sip", "eso",
+    "correcto", "excelente", "genial",
+}
+
+
+def interpret_option_choice(message: str, options: list, final_prices: list) -> int | None:
+    """
+    Interprets a customer's natural language option selection.
+    Returns a 0-indexed option number, or None if ambiguous.
+    """
+    msg = message.strip()
+    msg_lower = msg.lower()
+
+    # Fast path: numeric
+    if msg in ["1", "2", "3"]:
+        idx = int(msg) - 1
+        return idx if idx < len(options) else None
+
+    # Single option + any affirmation → auto-select
+    if len(options) == 1:
+        if msg_lower in _AFFIRMATIONS or any(msg_lower.startswith(a + " ") for a in _AFFIRMATIONS):
+            return 0
+
+    # Use Haiku to interpret natural language
+    options_text = "\n".join(
+        f"Opción {i}: {opt['label']} — ${price}, entrega {opt['lead_time']}"
+        for i, (opt, price) in enumerate(zip(options, final_prices), 1)
+    )
+    prompt = (
+        f"El cliente está eligiendo entre estas opciones de repuesto:\n{options_text}\n\n"
+        f"El cliente respondió: \"{message}\"\n\n"
+        f"¿A qué número de opción se refiere? "
+        f"Responde SOLO con el número (1, 2, o 3). "
+        f"Si no está claro, responde null."
+    )
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=5,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        if not raw.isdigit():
+            return None
+        idx = int(raw) - 1
+        return idx if 0 <= idx < len(options) else None
+    except Exception:
+        return None
+
+
 def parse_correction(message: str, current: dict) -> dict | None:
     """
     Given a correction message and the current complete request,

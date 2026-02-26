@@ -3,7 +3,7 @@ import time
 import threading
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
-from agent.parser import parse_request, extract_partial, parse_correction, detect_needs_human
+from agent.parser import parse_request, extract_partial, parse_correction, interpret_option_choice, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
@@ -506,51 +506,52 @@ def webhook():
 
     # 6. CUSTOMER SELECTING AN OPTION
     if incoming_number in pending_selections:
-        if incoming_message.strip() in ["1", "2", "3"]:
-            pending = pending_selections.get(incoming_number)
-            choice = int(incoming_message.strip()) - 1
-            options = pending["options"]
-            final_prices = pending["final_prices"]
-            parsed = pending["parsed"]
+        pending = pending_selections.get(incoming_number)
+        options = pending["options"]
+        final_prices = pending["final_prices"]
+        parsed = pending["parsed"]
 
-            if choice < len(options):
-                chosen = options[choice]
-                price = final_prices[choice]
+        choice = interpret_option_choice(incoming_message, options, final_prices)
 
-                cancel_followup(incoming_number)
-                send_whatsapp(
-                    incoming_number,
-                    f"✅ Confirmado. Tu {parsed.get('part')} para "
-                    f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')} "
-                    f"está apartado — *${price}*, entrega {chosen['lead_time']}. "
-                    f"Te contactamos para coordinar. 🙌"
-                )
+        if choice is not None:
+            chosen = options[choice]
+            price = final_prices[choice]
 
-                send_whatsapp(
-                    owner_number,
-                    f"🎯 *Cliente confirmó opción {choice + 1}*\n"
-                    f"Pieza: {parsed.get('part')} "
-                    f"{parsed.get('make')} {parsed.get('model')} "
-                    f"{parsed.get('year')}\n"
-                    f"Precio: ${price}\n"
-                    f"Proveedor: {chosen['supplier_name']}\n"
-                    f"Entrega: {chosen['lead_time']}\n"
-                    f"Cliente: {incoming_number}"
-                )
+            cancel_followup(incoming_number)
+            send_whatsapp(
+                incoming_number,
+                f"✅ Confirmado. Tu {parsed.get('part')} para "
+                f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')} "
+                f"está apartado — *${price}*, entrega {chosen['lead_time']}. "
+                f"Te contactamos para coordinar. 🙌"
+            )
 
-                log_request({
-                    "customer_number": incoming_number,
-                    "raw_message": incoming_message,
-                    "parsed": parsed,
-                    "options": options,
-                    "final_prices": final_prices,
-                    "chosen_option": choice + 1,
-                    "status": "confirmed"
-                })
+            send_whatsapp(
+                owner_number,
+                f"🎯 *Cliente confirmó opción {choice + 1}*\n"
+                f"Pieza: {parsed.get('part')} "
+                f"{parsed.get('make')} {parsed.get('model')} "
+                f"{parsed.get('year')}\n"
+                f"Precio: ${price}\n"
+                f"Proveedor: {chosen['supplier_name']}\n"
+                f"Entrega: {chosen['lead_time']}\n"
+                f"Cliente: {incoming_number}"
+            )
 
-                del pending_selections[incoming_number]
-            else:
-                send_whatsapp(incoming_number, "Por favor responde con 1, 2 o 3.")
+            log_request({
+                "customer_number": incoming_number,
+                "raw_message": incoming_message,
+                "parsed": parsed,
+                "options": options,
+                "final_prices": final_prices,
+                "chosen_option": choice + 1,
+                "status": "confirmed"
+            })
+
+            del pending_selections[incoming_number]
+        else:
+            nums = " o ".join(str(i) for i in range(1, len(options) + 1))
+            send_whatsapp(incoming_number, f"¿Cuál opción prefieres? Responde con el número ({nums}).")
 
         return jsonify({"status": "ok"}), 200
 
