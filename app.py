@@ -6,8 +6,10 @@ from agent.parser import parse_request, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
+from agent.responder import generate_response, generate_quote_presentation
 from utils.logger import log_request
 from utils.dashboard import render_dashboard
+from utils.followup import schedule_followup, cancel_followup
 from connectors.whatsapp_supplier import (
     handle_supplier_response,
     get_registered_suppliers
@@ -124,8 +126,8 @@ def process_customer_request(incoming_number: str, incoming_message: str):
 
     if not parsed:
         if is_human_request(incoming_message):
-            # Flag this customer as in a live session — bot steps aside
             live_sessions[incoming_number] = True
+            cancel_followup(incoming_number)
             print(f"🔴 Live session started for {incoming_number}")
 
             owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
@@ -144,70 +146,58 @@ def process_customer_request(incoming_number: str, incoming_message: str):
 
             send_whatsapp(
                 incoming_number,
-                "Claro, en un momento te contacta alguien del equipo. 👍\n\n"
-                "Si mientras tanto quieres buscar una pieza, solo envíanos:\n"
-                "Pieza + marca + modelo + año"
+                generate_response("human_request", incoming_message)
             )
         elif is_greeting(incoming_message):
             send_whatsapp(
                 incoming_number,
-                "👋 Hola! Somos *AutoParts Santiago*.\n\n"
-                "Encuentra cualquier repuesto sin salir de tu taller. "
-                "Solo envíanos la pieza, marca, modelo y año.\n\n"
-                "Ejemplo: *alternador Toyota Hilux 2008*"
+                generate_response("greeting", incoming_message)
             )
         elif is_secondary_greeting(incoming_message):
             send_whatsapp(
                 incoming_number,
-                "¡Todo bien! ¿En qué te puedo ayudar hoy? 😊"
+                generate_response("secondary_greeting", incoming_message)
             )
         elif is_wait(incoming_message):
             send_whatsapp(
                 incoming_number,
-                "Claro, tómate tu tiempo. Aquí estoy cuando estés listo. 👍"
+                generate_response("wait_acknowledgment", incoming_message)
             )
         elif is_ack(incoming_message):
             send_whatsapp(
                 incoming_number,
-                "Perfecto. 😊 ¿Hay algo más en que te pueda ayudar?"
+                generate_response("ack", incoming_message)
             )
         elif is_thanks(incoming_message):
+            cancel_followup(incoming_number)
             send_whatsapp(
                 incoming_number,
-                "¡Con gusto! Si necesitas algo más, aquí estamos. 👋"
+                generate_response("thanks", incoming_message)
             )
         elif is_vague_intent(incoming_message):
             send_whatsapp(
                 incoming_number,
-                "Con gusto te ayudo. 🔧\n\n"
-                "Dime qué pieza necesitas y para qué vehículo:\n"
-                "Pieza + marca + modelo + año\n\n"
-                "Ejemplo: *filtro de aceite Corolla 2015*"
+                generate_response("vague_intent", incoming_message)
             )
         elif detect_needs_human(incoming_message):
             pending_live_offers[incoming_number] = True
             send_whatsapp(
                 incoming_number,
-                "Veo que quizás no te estoy ayudando como deberías. 🙏\n\n"
-                "¿Quieres hablar directamente con alguien del equipo?\n"
-                "Responde *sí* para conectarte."
+                generate_response("human_request", incoming_message)
             )
         else:
             send_whatsapp(
                 incoming_number,
-                "No entendí tu mensaje. 🙏\n\n"
-                "Para buscar un repuesto envíanos:\n"
-                "Pieza + marca + modelo + año\n\n"
-                "Ejemplo: *filtro de aceite Corolla 2015*"
+                generate_response("unknown", incoming_message)
             )
         return
 
-    # It's a real part request — acknowledge now
+    # It's a real part request — acknowledge and schedule a follow-up
     send_whatsapp(
         incoming_number,
-        "🔩 *Recibido!*\n"
-        "Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
+        "🔩 Recibido. Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
     )
+    schedule_followup(incoming_number, delay=300)
 
     log_request({
         "customer_number": incoming_number,
@@ -219,12 +209,13 @@ def process_customer_request(incoming_number: str, incoming_message: str):
     results = source_parts(parsed)
 
     if not results:
+        cancel_followup(incoming_number)
         send_whatsapp(
             incoming_number,
-            f"Lo sentimos, no encontramos *{parsed.get('part')}* "
-            f"para {parsed.get('make')} {parsed.get('model')} "
-            f"{parsed.get('year')} en este momento. 😔\n\n"
-            "Te avisamos si conseguimos algo."
+            generate_response("part_not_found", incoming_message, context={
+                "pieza": parsed.get("part"),
+                "vehículo": f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')}"
+            })
         )
         log_request({
             "customer_number": incoming_number,
@@ -318,10 +309,8 @@ def webhook():
                 live_sessions.pop(customer_number, None)
                 send_whatsapp(
                     customer_number,
-                    "Gracias por tu paciencia. Si necesitas algo más, "
-                    "estamos aquí. 👋\n\n"
-                    "Para buscar un repuesto escríbenos:\n"
-                    "Pieza + marca + modelo + año"
+                    "Fue un gusto atenderte. Si necesitas algo más, aquí estamos. 👋\n\n"
+                    "Para buscar un repuesto: Pieza + marca + modelo + año"
                 )
                 print(f"🟢 Live session ended for {customer_number}")
                 send_whatsapp(owner_number, f"✅ Sesión terminada. Bot activo para {customer_number}.")
@@ -400,8 +389,8 @@ def webhook():
         else:
             send_whatsapp(
                 incoming_number,
-                "Entendido. 😊 Si necesitas algo más, aquí estamos.\n\n"
-                "Para buscar un repuesto: Pieza + marca + modelo + año"
+                "Entendido, aquí estamos si necesitas algo. "
+                "Para buscar un repuesto envíanos: Pieza + marca + modelo + año"
             )
         return jsonify({"status": "ok"}), 200
 
@@ -431,15 +420,13 @@ def webhook():
                 chosen = options[choice]
                 price = final_prices[choice]
 
+                cancel_followup(incoming_number)
                 send_whatsapp(
                     incoming_number,
-                    f"✅ *Perfecto!* Confirmado.\n\n"
-                    f"🔩 {parsed.get('part')} — "
-                    f"{parsed.get('make')} {parsed.get('model')} "
-                    f"{parsed.get('year')}\n"
-                    f"💵 Precio: *${price}*\n"
-                    f"🚚 Entrega: {chosen['lead_time']}\n\n"
-                    f"Te contactamos para coordinar la entrega. 🙌"
+                    f"✅ Confirmado. Tu {parsed.get('part')} para "
+                    f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')} "
+                    f"está apartado — *${price}*, entrega {chosen['lead_time']}. "
+                    f"Te contactamos para coordinar. 🙌"
                 )
 
                 send_whatsapp(

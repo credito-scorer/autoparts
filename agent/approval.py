@@ -1,6 +1,7 @@
 import os
 import requests
-from agent.recommender import format_approval_message, format_customer_quote
+from agent.recommender import format_approval_message
+from agent.responder import generate_quote_presentation
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -118,7 +119,9 @@ def handle_approval(message: str, pending_approvals: dict,
         "final_prices": final_prices
     }
 
-    customer_quote = format_customer_quote(options, parsed, final_prices)
+    from utils.followup import cancel_followup
+    cancel_followup(customer_number)
+    customer_quote = generate_quote_presentation(options, parsed, final_prices)
     send_whatsapp(customer_number, customer_quote)
 
     prices_display = " / ".join([f"${p}" for p in final_prices])
