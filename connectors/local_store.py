@@ -1,26 +1,53 @@
 import os
+import time
 from agent.approval import send_whatsapp
+from connectors.sheets import get_stores_sheet
 
 # Maps forwarded message SID → store number (for owner reply routing)
 store_message_map = {}
 
-# In-memory store registry
-# Each entry: number, name, contact, specialty (list), tier (1|2), active (bool)
-STORE_REGISTRY = [
-    # Example — add real stores here:
-    # {
-    #     "number": "+50712345678",
-    #     "name": "Repuestos El Toro",
-    #     "contact": "Juan",
-    #     "specialty": ["frenos", "suspensión", "motor"],
-    #     "tier": 1,
-    #     "active": True
-    # },
-]
+# Simple cache to avoid hitting Sheets on every webhook request
+_store_cache: list = []
+_cache_ts: float = 0
+CACHE_TTL = 300  # seconds (5 minutes)
+
+
+def _load_stores() -> list:
+    """Read all rows from the Stores sheet and parse into dicts."""
+    sheet = get_stores_sheet()
+    records = sheet.get_all_records()
+    stores = []
+    for r in records:
+        number = str(r.get("number", "")).strip()
+        if not number:
+            continue
+        stores.append({
+            "number": number,
+            "name": str(r.get("name", "")).strip(),
+            "contact": str(r.get("contact", "")).strip(),
+            "specialty": [s.strip() for s in str(r.get("specialty", "")).split(",") if s.strip()],
+            "tier": int(r.get("tier", 1) or 1),
+            "active": str(r.get("active", "TRUE")).strip().upper() == "TRUE",
+        })
+    return stores
+
+
+def _invalidate_cache():
+    global _cache_ts
+    _cache_ts = 0
 
 
 def get_registered_stores() -> list:
-    return [s for s in STORE_REGISTRY if s.get("active", True)]
+    """Return all active stores, using cache where possible."""
+    global _store_cache, _cache_ts
+    if time.time() - _cache_ts < CACHE_TTL:
+        return [s for s in _store_cache if s.get("active")]
+    try:
+        _store_cache = _load_stores()
+        _cache_ts = time.time()
+    except Exception as e:
+        print(f"⚠️ Could not load stores from sheet: {e}")
+    return [s for s in _store_cache if s.get("active")]
 
 
 def get_store_numbers() -> list:
@@ -28,7 +55,7 @@ def get_store_numbers() -> list:
 
 
 def get_store_by_number(number: str) -> dict | None:
-    for s in STORE_REGISTRY:
+    for s in get_registered_stores():
         if s["number"] == number:
             return s
     return None
@@ -36,24 +63,25 @@ def get_store_by_number(number: str) -> dict | None:
 
 def add_store(number: str, name: str, contact: str,
               specialty: list, tier: int = 1) -> dict:
-    store = {
-        "number": number,
-        "name": name,
-        "contact": contact,
-        "specialty": specialty,
-        "tier": tier,
-        "active": True
-    }
-    STORE_REGISTRY.append(store)
+    specialty_str = ",".join(specialty) if isinstance(specialty, list) else specialty
+    sheet = get_stores_sheet()
+    sheet.append_row([number, name, contact, specialty_str, tier, "TRUE"])
+    _invalidate_cache()
     print(f"✅ Store added: {name} ({number})")
-    return store
+    return {
+        "number": number, "name": name, "contact": contact,
+        "specialty": specialty, "tier": tier, "active": True
+    }
 
 
 def remove_store(number: str) -> bool:
-    for s in STORE_REGISTRY:
-        if s["number"] == number:
-            s["active"] = False
-            print(f"🗑️ Store deactivated: {s['name']}")
+    sheet = get_stores_sheet()
+    rows = sheet.get_all_values()
+    for i, row in enumerate(rows):
+        if row and str(row[0]).strip() == number:
+            sheet.update_cell(i + 1, 6, "FALSE")
+            _invalidate_cache()
+            print(f"🗑️ Store deactivated: {number}")
             return True
     return False
 

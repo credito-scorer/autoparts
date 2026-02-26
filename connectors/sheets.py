@@ -29,6 +29,18 @@ def get_order_log():
     client = get_client()
     return client.open_by_key(os.getenv("GOOGLE_SHEETS_ID")).sheet1
 
+
+def get_stores_sheet():
+    """Return the Stores worksheet, creating it with headers if it doesn't exist."""
+    client = get_client()
+    spreadsheet = client.open_by_key(os.getenv("GOOGLE_SHEETS_ID"))
+    try:
+        return spreadsheet.worksheet("Stores")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title="Stores", rows=100, cols=6)
+        ws.append_row(["number", "name", "contact", "specialty", "tier", "active"])
+        return ws
+
 def search_supplier_sheet(sheet_id: str, parsed: dict) -> dict | None:
     try:
         client = get_client()
