@@ -12,6 +12,12 @@ from connectors.whatsapp_supplier import (
     handle_supplier_response,
     get_registered_suppliers
 )
+from connectors.local_store import (
+    get_store_numbers,
+    handle_store_message,
+    handle_owner_reply_to_store,
+    store_message_map
+)
 
 load_dotenv()
 
@@ -297,6 +303,13 @@ def webhook():
     # 1. OWNER → Approval or reply-forwarding flow
     if incoming_normalized == owner_number.replace("+", ""):
 
+        # Reply to a store message → route back to store
+        if replied_to_sid and replied_to_sid in store_message_map:
+            store_number = store_message_map[replied_to_sid]
+            handle_owner_reply_to_store(store_number, incoming_message, replied_to_sid)
+            send_whatsapp(owner_number, "✅ Mensaje enviado a la tienda.")
+            return jsonify({"status": "ok"}), 200
+
         # Reply to a live session / escalation message
         if replied_to_sid and replied_to_sid in escalation_message_map:
             customer_number = escalation_message_map[replied_to_sid]
@@ -357,7 +370,12 @@ def webhook():
             print(f"✅ Supplier response: {result['supplier_name']}")
         return jsonify({"status": "ok"}), 200
 
-    # 3. PENDING LIVE OFFER → customer responding to live session offer
+    # 3. LOCAL STORE → forward message to owner, never treat as customer
+    if incoming_number in get_store_numbers():
+        handle_store_message(incoming_number, incoming_message)
+        return jsonify({"status": "ok"}), 200
+
+    # 4. PENDING LIVE OFFER → customer responding to live session offer
     if incoming_number in pending_live_offers:
         pending_live_offers.pop(incoming_number)
         affirmative = incoming_message.strip().lower() in [
@@ -387,7 +405,7 @@ def webhook():
             )
         return jsonify({"status": "ok"}), 200
 
-    # 4. LIVE SESSION → forward to owner, skip the bot
+    # 5. LIVE SESSION → forward to owner, skip the bot
 
     if incoming_number in live_sessions:
         if owner_number:
@@ -400,7 +418,7 @@ def webhook():
                 print(f"📨 Forwarded live message from {incoming_number} → owner")
         return jsonify({"status": "ok"}), 200
 
-    # 5. CUSTOMER SELECTING AN OPTION
+    # 6. CUSTOMER SELECTING AN OPTION
     if incoming_number in pending_selections:
         if incoming_message.strip() in ["1", "2", "3"]:
             pending = pending_selections.get(incoming_number)
@@ -452,7 +470,7 @@ def webhook():
 
         return jsonify({"status": "ok"}), 200
 
-    # 6. ALL OTHER MESSAGES → process in background
+    # 7. ALL OTHER MESSAGES → process in background
     thread = threading.Thread(
         target=process_customer_request,
         args=(incoming_number, incoming_message)
