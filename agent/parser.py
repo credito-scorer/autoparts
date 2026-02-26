@@ -62,6 +62,57 @@ No incluyas explicaciones, solo el JSON."""
     except json.JSONDecodeError:
         return None
 
+def parse_request_multi(message: str) -> list[dict]:
+    """
+    Detect all part requests in a single message.
+    Returns a list of partial request dicts (each may have null fields).
+    Returns [] for purely conversational messages.
+    """
+    prompt = f"""Eres un asistente de repuestos de autos en Panamá.
+
+Un mecánico envió este mensaje:
+"{message}"
+
+Detecta TODAS las piezas solicitadas. Para cada una extrae:
+- part: nombre del repuesto en español
+- make: marca del vehículo (o null)
+- model: modelo del vehículo (o null)
+- year: año del vehículo (o null)
+
+Regla crítica: Si un campo no está claramente indicado, devuelve null. Nunca inferas ni adivines.
+Si el vehículo es compartido entre piezas, repite los campos de vehículo en cada objeto.
+
+Responde ÚNICAMENTE con un array JSON:
+[{{"part": "...", "make": "...", "model": "...", "year": "..."}}, ...]
+
+Si hay un solo repuesto, devuelve un array de un elemento.
+Responde con null si el mensaje es puramente conversacional sin mención de piezas o vehículos.
+No incluyas explicaciones."""
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        if not raw or raw == "null":
+            return []
+        result = json.loads(raw)
+        if isinstance(result, list):
+            return [r for r in result if r.get("part")]
+        if isinstance(result, dict) and result.get("part"):
+            return [result]
+        return []
+    except Exception:
+        return []
+
+
 def extract_partial(message: str, known: dict) -> dict | None:
     """
     Given a follow-up message and what we already know, extract any new

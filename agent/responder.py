@@ -156,6 +156,101 @@ def generate_response(situation: str, customer_message: str, context: dict = {})
         return WAIT_ACKNOWLEDGMENT
 
 
+GOODBYE_COMPLETED = "Con gusto, aquí estamos cuando nos necesites. 👋"
+GOODBYE_MID_FLOW  = "Claro, cuando necesites una pieza aquí estamos. 👋"
+
+
+def generate_queue_confirmation(requests: list) -> str:
+    """Generate a confirmation summary for one or more queued requests."""
+    if len(requests) == 1:
+        req = requests[0]
+        part  = req.get("part", "?")
+        make  = req.get("make", "?")
+        model = req.get("model", "?")
+        year  = req.get("year", "?")
+        instruction = (
+            f"Genera un resumen de confirmación del pedido para el cliente. "
+            f"Pieza: {part}. Vehículo: {make} {model} {year}. "
+            f"Usa 🔩 para la pieza y 🚗 para el vehículo. "
+            f"Pide que confirmen con 'sí' o que corrijan lo que esté mal. "
+            f"Sé claro y conciso. No uses frases largas."
+        )
+    else:
+        lines = "\n".join(
+            f"🔩 {r.get('part')} — {r.get('make')} {r.get('model')} {r.get('year')}"
+            for r in requests
+        )
+        instruction = (
+            f"El cliente pidió estas piezas:\n{lines}\n\n"
+            f"Genera un resumen de confirmación del pedido completo. "
+            f"Lista cada pieza con 🔩. Pide que confirmen con 'sí' o corrijan lo que esté mal. "
+            f"Sé conciso, máximo 4 líneas."
+        )
+
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": instruction}]
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        print(f"⚠️ generate_queue_confirmation error: {e}")
+        if len(requests) == 1:
+            req = requests[0]
+            return (
+                f"🔩 {req.get('part')} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}\n\n"
+                f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
+            )
+        lines = "\n".join(
+            f"🔩 {r.get('part')} — {r.get('make')} {r.get('model')} {r.get('year')}"
+            for r in requests
+        )
+        return (
+            f"Confirmemos tu pedido:\n\n{lines}\n\n"
+            f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
+        )
+
+
+def generate_multi_sourcing_summary(
+    found_parts: list, not_found_parts: list, vehicle: str
+) -> str:
+    """
+    Generate a message about sourcing results.
+    found_parts: list of (req, options) tuples
+    not_found_parts: list of req dicts
+    """
+    not_found_names = ", ".join(r.get("part", "?") for r in not_found_parts)
+    found_names     = ", ".join(r.get("part", "?") for r, _ in found_parts)
+
+    prompt = (
+        f"Resultados de búsqueda de repuestos{f' para {vehicle}' if vehicle else ''}:\n"
+        + (f"✅ Encontrado(s): {found_names}\n" if found_names else "")
+        + f"❌ No disponible(s): {not_found_names}\n\n"
+        f"Informa al cliente con empatía. "
+        + (f"Menciona que se enviará cotización para {found_names}. " if found_names else "")
+        + f"Para {not_found_names}, SIEMPRE ofrece un siguiente paso "
+        f"(avisar cuando haya stock, sugerir alternativa, o conectar con el equipo). "
+        f"Sé conciso, máximo 3-4 oraciones."
+    )
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        print(f"⚠️ generate_multi_sourcing_summary error: {e}")
+        msg = ""
+        if found_parts:
+            msg += f"✅ Cotización en camino para: {found_names}.\n"
+        msg += f"❌ No pudimos encontrar: {not_found_names}. Te avisamos cuando tengamos disponibilidad."
+        return msg.strip()
+
+
 def generate_quote_presentation(options: list, parsed: dict, final_prices: list) -> str:
     part = parsed.get("part", "")
     make = parsed.get("make", "")

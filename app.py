@@ -1,13 +1,22 @@
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
-from agent.parser import parse_request, extract_partial, parse_correction, interpret_option_choice, detect_needs_human
+from agent.parser import (
+    parse_request_multi, extract_partial, parse_correction,
+    interpret_option_choice, detect_needs_human
+)
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
-from agent.responder import generate_response, generate_quote_presentation
+from agent.responder import (
+    generate_response, generate_quote_presentation,
+    generate_queue_confirmation, generate_multi_sourcing_summary,
+    GOODBYE_COMPLETED, GOODBYE_MID_FLOW,
+)
 from utils.logger import log_request
 from utils.dashboard import render_dashboard
 from utils.followup import schedule_followup, cancel_followup
@@ -26,73 +35,124 @@ load_dotenv()
 
 app = Flask(__name__)
 
-pending_approvals = {}
-pending_selections = {}
-approval_message_map = {}
-
-# Maps message ID → customer number for reply forwarding
+pending_approvals     = {}
+pending_selections    = {}
+approval_message_map  = {}
 escalation_message_map = {}
-
-# Customers currently in a live session (bot is paused for them)
-live_sessions = {}
-
-# Customers who were offered a live session and we're waiting for their confirmation
-pending_live_offers = {}
-
-# Partial request state: customer number → {part, make, model, year, last_seen}
-pending_requests: dict = {}
-STATE_TTL = 1800  # 30 minutes
-
-# Complete requests awaiting customer confirmation before sourcing
-pending_confirmation: dict = {}
+live_sessions         = {}
+pending_live_offers   = {}
 
 
-def _get_request_state(number: str) -> dict | None:
-    state = pending_requests.get(number)
-    if not state:
-        return None
-    if time.time() - state.get("last_seen", 0) > STATE_TTL:
-        pending_requests.pop(number, None)
-        return None
-    return state
+# ── Conversation state machine ─────────────────────────────────────────────────
+
+class ConversationState(Enum):
+    ACTIVE    = "active"    # Building request queue
+    WAITING   = "waiting"   # Sourcing / approval / option selection in progress
+    COMPLETED = "completed" # Session ended (purchase confirmed or goodbye)
 
 
-def _update_request_state(number: str, fields: dict) -> dict:
-    existing = pending_requests.get(number, {})
-    updated = {
-        "part":  str(fields.get("part")  or existing.get("part")  or "").strip(),
-        "make":  str(fields.get("make")  or existing.get("make")  or "").strip(),
-        "model": str(fields.get("model") or existing.get("model") or "").strip(),
-        "year":  str(fields.get("year")  or existing.get("year")  or "").strip(),
-        "last_seen": time.time(),
-    }
-    pending_requests[number] = updated
-    return updated
+conversations:    dict = {}
+CONVERSATION_TTL  = 10800   # 3 hours
+CLEANUP_INTERVAL  = 900     # 15 minutes
 
 
-def _clear_request_state(number: str) -> None:
-    pending_requests.pop(number, None)
-
-
-def _is_request_complete(state: dict) -> bool:
-    return all(state.get(f) for f in ("part", "make", "model", "year"))
-
-
-def _missing_fields(state: dict) -> list:
-    return [f for f in ("part", "make", "model", "year") if not state.get(f)]
-
-
-def _merge_with_state(new_fields: dict, existing: dict | None) -> dict:
-    """Merge parsed fields with existing state. New non-empty values take priority."""
-    if not existing:
-        return new_fields
+def _new_conversation() -> dict:
     return {
-        "part":  str(new_fields.get("part")  or existing.get("part")  or "").strip(),
-        "make":  str(new_fields.get("make")  or existing.get("make")  or "").strip(),
-        "model": str(new_fields.get("model") or existing.get("model") or "").strip(),
-        "year":  str(new_fields.get("year")  or existing.get("year")  or "").strip(),
-        **{k: v for k, v in new_fields.items() if k not in ("part", "make", "model", "year")},
+        "state":         ConversationState.ACTIVE,
+        "request_queue": [],
+        "confirming":    False,
+        "last_seen":     time.time(),
     }
+
+
+def _get_or_create_conversation(number: str) -> dict:
+    conv = conversations.get(number)
+    # Treat expired or completed conversations as fresh starts
+    if conv is None or conv["state"] == ConversationState.COMPLETED:
+        conv = _new_conversation()
+        conversations[number] = conv
+    return conv
+
+
+def _close_conversation(number: str, mid_flow: bool) -> None:
+    """End a conversation cleanly, notify customer, and remove from dict."""
+    conversations.pop(number, None)
+    cancel_followup(number)
+    send_whatsapp(number, GOODBYE_MID_FLOW if mid_flow else GOODBYE_COMPLETED)
+
+
+def _cleanup_loop() -> None:
+    """Background daemon: remove stale conversations every CLEANUP_INTERVAL seconds."""
+    while True:
+        time.sleep(CLEANUP_INTERVAL)
+        now = time.time()
+        expired = [
+            n for n, c in list(conversations.items())
+            if now - c["last_seen"] > CONVERSATION_TTL
+        ]
+        for n in expired:
+            conversations.pop(n, None)
+        if expired:
+            print(f"🧹 Cleaned up {len(expired)} stale conversation(s)")
+
+
+_cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True)
+_cleanup_thread.start()
+
+
+# ── Queue helpers ──────────────────────────────────────────────────────────────
+
+def _req_complete(req: dict) -> bool:
+    return all(req.get(f) for f in ("part", "make", "model", "year"))
+
+
+def _queue_all_complete(queue: list) -> bool:
+    return bool(queue) and all(_req_complete(r) for r in queue)
+
+
+def _apply_to_queue(queue: list, update: dict) -> None:
+    """Apply field updates to all incomplete items (vehicle info is shared)."""
+    for item in queue:
+        if not _req_complete(item):
+            for k, v in update.items():
+                if k in ("part", "make", "model", "year") and v and not item.get(k):
+                    item[k] = str(v).strip()
+
+
+def _known_from_queue(queue: list) -> dict:
+    """Return known fields from the first incomplete item."""
+    for item in queue:
+        if not _req_complete(item):
+            return {k: v for k, v in item.items() if v and k in ("part", "make", "model", "year")}
+    return {}
+
+
+def _missing_from_queue(queue: list) -> list:
+    """Return missing fields from the first incomplete item."""
+    for item in queue:
+        if not _req_complete(item):
+            return [k for k in ("part", "make", "model", "year") if not item.get(k)]
+    return []
+
+
+def _vehicle_str(queue: list) -> str:
+    """Build a vehicle description string from queue items."""
+    for req in queue:
+        parts = [req.get("make"), req.get("model"), req.get("year")]
+        if any(parts):
+            return " ".join(p for p in parts if p)
+    return ""
+
+
+def _enqueue_requests(conv: dict, new_requests: list) -> None:
+    """Append new parsed requests to the conversation queue."""
+    for new_req in new_requests:
+        item = {k: str(new_req.get(k) or "").strip() for k in ("part", "make", "model", "year")}
+        conv["request_queue"].append(item)
+    conv["last_seen"] = time.time()
+
+
+# ── Phrase detection ───────────────────────────────────────────────────────────
 
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey"]
@@ -110,11 +170,6 @@ ACK_PHRASES = [
     "ok", "okey", "okay", "entendido", "perfecto", "listo", "bueno",
     "ah ok", "ah okey", "ya veo", "ya", "claro", "dale", "va",
     "de acuerdo", "10 puntos", "excelente", "genial"
-]
-
-THANKS_PHRASES = [
-    "gracias", "muchas gracias", "mil gracias", "ok gracias",
-    "okey gracias", "gracias!", "gracias!!", "ty", "thanks"
 ]
 
 VAGUE_INTENT = [
@@ -139,6 +194,14 @@ HUMAN_REQUEST = [
     "alguien que trabaje"
 ]
 
+GOODBYE_PHRASES = {
+    "gracias", "muchas gracias", "mil gracias", "ok gracias", "okey gracias",
+    "gracias!", "gracias!!", "ty", "thanks", "thank you",
+    "hasta luego", "hasta pronto", "bye", "chao", "chau", "adios", "adiós",
+    "nos vemos", "cuídate", "cuídate", "que te vaya bien",
+    "ya no necesito", "no gracias", "dejalo", "déjalo", "olvídalo", "olvidalo",
+}
+
 
 def is_greeting(message: str) -> bool:
     msg = message.lower().strip()
@@ -160,11 +223,6 @@ def is_ack(message: str) -> bool:
     return msg in ACK_PHRASES
 
 
-def is_thanks(message: str) -> bool:
-    msg = message.lower().strip()
-    return any(msg.startswith(t) for t in THANKS_PHRASES)
-
-
 def is_vague_intent(message: str) -> bool:
     msg = message.lower().strip()
     if any(msg.startswith(v) for v in VAGUE_INTENT):
@@ -177,178 +235,202 @@ def is_human_request(message: str) -> bool:
     return any(phrase in msg for phrase in HUMAN_REQUEST)
 
 
-def _run_sourcing(incoming_number: str, incoming_message: str, parsed: dict) -> None:
-    """Run sourcing + approval flow for a confirmed, complete request."""
-    send_whatsapp(
-        incoming_number,
-        "🔩 Recibido. Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
-    )
-    schedule_followup(incoming_number, delay=300)
+def is_goodbye(message: str) -> bool:
+    msg = message.lower().strip()
+    return msg in GOODBYE_PHRASES
 
-    log_request({
-        "customer_number": incoming_number,
-        "raw_message": incoming_message,
-        "parsed": parsed,
-        "status": "received"
-    })
 
-    results = source_parts(parsed)
+# ── Escalation helper ──────────────────────────────────────────────────────────
 
-    if not results:
-        cancel_followup(incoming_number)
-        send_whatsapp(
-            incoming_number,
-            generate_response("part_not_found", incoming_message, context={
-                "pieza": parsed.get("part"),
-                "vehículo": f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')}"
-            })
+def _handle_human_escalation(number: str, message: str) -> None:
+    """Start a live session and notify the owner."""
+    conversations.pop(number, None)
+    live_sessions[number] = True
+    cancel_followup(number)
+    print(f"🔴 Live session started for {number}")
+
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    if owner_number:
+        msg_sid = send_whatsapp(
+            owner_number,
+            f"🔴 *Sesión en vivo iniciada*\n"
+            f"Cliente: {number}\n"
+            f"Mensaje: \"{message}\"\n\n"
+            f"_Responde a este mensaje para hablarle directamente. "
+            f"Escribe *fin* para terminar la sesión y devolver el control al bot._"
         )
-        log_request({
-            "customer_number": incoming_number,
-            "raw_message": incoming_message,
-            "parsed": parsed,
-            "status": "not_found"
-        })
+        if msg_sid:
+            escalation_message_map[msg_sid] = number
+            print(f"📋 Live session mapped: {msg_sid} → {number}")
+
+    send_whatsapp(number, generate_response("human_request", message))
+
+
+# ── Missing-fields prompt ──────────────────────────────────────────────────────
+
+def _send_queue_missing_prompt(number: str, message: str, conv: dict) -> None:
+    """Ask for the next missing field in the queue."""
+    queue   = conv["request_queue"]
+    known   = _known_from_queue(queue)
+    missing = _missing_from_queue(queue)
+    if not missing:
         return
-
-    options = build_options(results, parsed)
-
-    pending_selections[incoming_number] = {
-        "options": options,
-        "parsed": parsed,
-        "final_prices": [opt["suggested_price"] for opt in options]
-    }
-
-    send_for_approval(
-        options, parsed, incoming_number,
-        pending_approvals, approval_message_map
+    is_first = (
+        len(queue) == 1
+        and not known.get("make")
+        and not known.get("model")
+        and not known.get("year")
     )
-
-    log_request({
-        "customer_number": incoming_number,
-        "raw_message": incoming_message,
-        "parsed": parsed,
-        "options": options,
-        "status": "pending_approval"
-    })
-
-
-def _send_missing_prompt(number: str, message: str, state: dict, is_first: bool) -> None:
-    known = {k: v for k, v in state.items() if v and k in ("part", "make", "model", "year")}
-    missing = _missing_fields(state)
     send_whatsapp(number, generate_response("missing_fields", message, {
-        "known": known,
-        "missing": missing,
+        "known":            known,
+        "missing":          missing,
         "is_first_message": is_first,
     }))
 
 
-def process_customer_request(incoming_number: str, incoming_message: str):
-    existing_state = _get_request_state(incoming_number)
-    parsed = parse_request(incoming_message)
+# ── Multi-sourcing ─────────────────────────────────────────────────────────────
 
-    # ── Conversation state tracking ──────────────────────────────────────────
-    # Has any part/vehicle info? (partial or complete parse)
-    has_part_info = parsed is not None and any(
-        parsed.get(f) for f in ("part", "make", "model", "year")
+def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
+    """Source all parts in the queue in parallel, then send approvals / not-found notices."""
+    count = len(queue)
+    noun  = "pieza" if count == 1 else "piezas"
+    send_whatsapp(
+        number,
+        f"🔩 Recibido. Estamos buscando {'tu' if count == 1 else 'tus'} {count} {noun}, "
+        f"te confirmamos en unos minutos. ⏳"
     )
+    schedule_followup(number, delay=300)
 
-    if has_part_info:
-        merged = _merge_with_state(parsed, existing_state)
-        if _is_request_complete(merged):
-            _clear_request_state(incoming_number)
-            parsed = merged          # fall through to sourcing
-        else:
-            _update_request_state(incoming_number, merged)
-            _send_missing_prompt(incoming_number, incoming_message, merged, existing_state is None)
-            return
+    for req in queue:
+        log_request({
+            "customer_number": number,
+            "raw_message":     message,
+            "parsed":          req,
+            "status":          "received",
+        })
 
-    elif existing_state:
-        # No structured parse but we have state — try to extract new fields from this message
-        partial = extract_partial(incoming_message, existing_state)
-        if partial:
-            merged = _merge_with_state(partial, existing_state)
-            if _is_request_complete(merged):
-                _clear_request_state(incoming_number)
-                parsed = merged      # fall through to sourcing
-            else:
-                _update_request_state(incoming_number, merged)
-                _send_missing_prompt(incoming_number, incoming_message, merged, False)
-                return
-        else:
-            # Message didn't add info — handle conversationally but nudge toward completion
-            if is_wait(incoming_message):
-                send_whatsapp(incoming_number, generate_response("wait_acknowledgment", incoming_message))
-            elif is_thanks(incoming_message):
-                _clear_request_state(incoming_number)
-                cancel_followup(incoming_number)
-                send_whatsapp(incoming_number, generate_response("thanks", incoming_message))
-            else:
-                # Re-prompt for the missing fields (brief, no re-greeting)
-                _send_missing_prompt(incoming_number, incoming_message, existing_state, False)
-            return
+    found     = []   # [(req, options)]
+    not_found = []   # [req]
 
-    # ── Purely conversational (no part info, no existing state) ─────────────
-    if parsed is None:
-        if is_human_request(incoming_message):
-            live_sessions[incoming_number] = True
-            cancel_followup(incoming_number)
-            print(f"🔴 Live session started for {incoming_number}")
+    with ThreadPoolExecutor(max_workers=min(count, 4)) as ex:
+        future_to_req = {ex.submit(source_parts, req): req for req in queue}
+        for fut in as_completed(future_to_req):
+            req = future_to_req[fut]
+            try:
+                results = fut.result()
+                if results:
+                    found.append((req, build_options(results, req)))
+                else:
+                    not_found.append(req)
+            except Exception as e:
+                print(f"⚠️ source_parts error for {req.get('part')}: {e}")
+                not_found.append(req)
 
-            owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
-            if owner_number:
-                msg_sid = send_whatsapp(
-                    owner_number,
-                    f"🔴 *Sesión en vivo iniciada*\n"
-                    f"Cliente: {incoming_number}\n"
-                    f"Mensaje: \"{incoming_message}\"\n\n"
-                    f"_Responde a este mensaje para hablarle directamente. "
-                    f"Escribe *fin* para terminar la sesión y devolver el control al bot._"
-                )
-                if msg_sid:
-                    escalation_message_map[msg_sid] = incoming_number
-                    print(f"📋 Live session mapped: {msg_sid} → {incoming_number}")
+    cancel_followup(number)
 
-            send_whatsapp(incoming_number, generate_response("human_request", incoming_message))
+    # Notify about parts not found (if any)
+    if not_found:
+        vehicle = _vehicle_str(queue)
+        send_whatsapp(number, generate_multi_sourcing_summary(found, not_found, vehicle))
+        for req in not_found:
+            log_request({
+                "customer_number": number,
+                "raw_message":     message,
+                "parsed":          req,
+                "status":          "not_found",
+            })
 
-        elif is_greeting(incoming_message):
-            send_whatsapp(incoming_number, generate_response("greeting", incoming_message))
-        elif is_secondary_greeting(incoming_message):
-            send_whatsapp(incoming_number, generate_response("secondary_greeting", incoming_message))
-        elif is_wait(incoming_message):
-            send_whatsapp(incoming_number, generate_response("wait_acknowledgment", incoming_message))
-        elif is_ack(incoming_message):
-            send_whatsapp(incoming_number, generate_response("ack", incoming_message))
-        elif is_thanks(incoming_message):
-            cancel_followup(incoming_number)
-            send_whatsapp(incoming_number, generate_response("thanks", incoming_message))
-        elif is_vague_intent(incoming_message):
-            send_whatsapp(incoming_number, generate_response("vague_intent", incoming_message))
-        elif detect_needs_human(incoming_message):
-            pending_live_offers[incoming_number] = True
-            send_whatsapp(incoming_number, generate_response("human_request", incoming_message))
-        else:
-            send_whatsapp(incoming_number, generate_response("unknown", incoming_message))
+    # Send approval requests for found parts
+    for req, options in found:
+        send_for_approval(options, req, number, pending_approvals, approval_message_map)
+        log_request({
+            "customer_number": number,
+            "raw_message":     message,
+            "parsed":          req,
+            "options":         options,
+            "status":          "pending_approval",
+        })
+
+    # If nothing was found at all, reset the conversation so customer can try again
+    if not found:
+        conv = conversations.get(number)
+        if conv:
+            conv["state"]         = ConversationState.ACTIVE
+            conv["request_queue"] = []
+            conv["confirming"]    = False
+
+
+# ── Main customer request handler ──────────────────────────────────────────────
+
+def process_customer_request(number: str, message: str) -> None:
+    conv  = _get_or_create_conversation(number)
+    queue = conv["request_queue"]
+
+    # ── Goodbye detection ──────────────────────────────────────────────────────
+    if is_goodbye(message):
+        _close_conversation(number, mid_flow=bool(queue))
         return
 
-    # ── Request complete → ask customer to confirm before sourcing ────────────
-    pending_confirmation[incoming_number] = dict(parsed)
-    send_whatsapp(
-        incoming_number,
-        generate_response("confirmation_summary", incoming_message, context={
-            "part":  parsed.get("part"),
-            "make":  parsed.get("make"),
-            "model": parsed.get("model"),
-            "year":  parsed.get("year"),
-        })
-    )
+    # ── Try to parse as part request ───────────────────────────────────────────
+    new_requests = parse_request_multi(message)
 
+    if new_requests:
+        _enqueue_requests(conv, new_requests)
+
+    elif queue:
+        # No new part found — try to extract vehicle/part fields from this message
+        known   = _known_from_queue(queue)
+        partial = extract_partial(message, known) if known else None
+
+        if partial:
+            _apply_to_queue(queue, partial)
+            conv["last_seen"] = time.time()
+        else:
+            # Conversational message while mid-request
+            if is_wait(message):
+                send_whatsapp(number, generate_response("wait_acknowledgment", message))
+                return
+            # Re-prompt for the missing field
+            _send_queue_missing_prompt(number, message, conv)
+            return
+
+    else:
+        # No queue — purely conversational
+        if is_human_request(message):
+            _handle_human_escalation(number, message)
+        elif is_greeting(message):
+            send_whatsapp(number, generate_response("greeting", message))
+        elif is_secondary_greeting(message):
+            send_whatsapp(number, generate_response("secondary_greeting", message))
+        elif is_wait(message):
+            send_whatsapp(number, generate_response("wait_acknowledgment", message))
+        elif is_ack(message):
+            send_whatsapp(number, generate_response("ack", message))
+        elif is_vague_intent(message):
+            send_whatsapp(number, generate_response("vague_intent", message))
+        elif detect_needs_human(message):
+            pending_live_offers[number] = True
+            send_whatsapp(number, generate_response("human_request", message))
+        else:
+            send_whatsapp(number, generate_response("unknown", message))
+        return
+
+    # ── Check if all queue items are complete ──────────────────────────────────
+    if _queue_all_complete(conv["request_queue"]):
+        conv["confirming"] = True
+        conv["last_seen"]  = time.time()
+        send_whatsapp(number, generate_queue_confirmation(conv["request_queue"]))
+    else:
+        _send_queue_missing_prompt(number, message, conv)
+
+
+# ── Webhook ────────────────────────────────────────────────────────────────────
 
 @app.route("/webhook", methods=["GET"])
 def webhook_verify():
     """Meta webhook verification handshake."""
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
+    mode      = request.args.get("hub.mode")
+    token     = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
     if mode == "subscribe" and token == os.getenv("META_VERIFY_TOKEN"):
@@ -361,31 +443,27 @@ def webhook_verify():
 def webhook():
     data = request.get_json()
 
-    # Parse Meta's nested webhook structure
     try:
         value = data["entry"][0]["changes"][0]["value"]
     except (KeyError, IndexError, TypeError):
         return jsonify({"status": "ok"}), 200
 
-    # Skip status updates (delivered, read, sent, etc.)
     if "messages" not in value:
         return jsonify({"status": "ok"}), 200
 
     message = value["messages"][0]
 
-    # Only handle text messages
     if message.get("type") != "text":
         return jsonify({"status": "ok"}), 200
 
-    # Meta sends numbers without + (e.g. 56912345678) — normalize to +56912345678
-    incoming_number = "+" + message["from"]
+    incoming_number  = "+" + message["from"]
     incoming_message = message.get("text", {}).get("body", "").strip()
-    replied_to_sid = message.get("context", {}).get("id")
+    replied_to_sid   = message.get("context", {}).get("id")
 
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
-    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
-    owner_number = "+" + owner_number
+    owner_number        = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
+    owner_number        = "+" + owner_number
     incoming_normalized = incoming_number.replace("+", "").strip()
 
     # 1. OWNER → Approval or reply-forwarding flow
@@ -421,8 +499,8 @@ def webhook():
 
         # Manual live session command: "tomar +56912345678"
         if incoming_message.lower().startswith("tomar "):
-            parts = incoming_message.strip().split()
-            raw_number = parts[1] if len(parts) > 1 else ""
+            parts       = incoming_message.strip().split()
+            raw_number  = parts[1] if len(parts) > 1 else ""
             if not raw_number.startswith("+"):
                 raw_number = "+" + raw_number
             live_sessions[raw_number] = True
@@ -448,7 +526,7 @@ def webhook():
 
     # 2. SUPPLIER → Supplier response flow
     registered_suppliers = get_registered_suppliers()
-    supplier_numbers = [s["number"] for s in registered_suppliers]
+    supplier_numbers     = [s["number"] for s in registered_suppliers]
 
     if incoming_number in supplier_numbers:
         result = handle_supplier_response(incoming_number, incoming_message)
@@ -479,10 +557,7 @@ def webhook():
                 )
                 if msg_sid:
                     escalation_message_map[msg_sid] = incoming_number
-            send_whatsapp(
-                incoming_number,
-                "Perfecto, en un momento te contacta alguien del equipo. 👍"
-            )
+            send_whatsapp(incoming_number, "Perfecto, en un momento te contacta alguien del equipo. 👍")
         else:
             send_whatsapp(
                 incoming_number,
@@ -492,7 +567,6 @@ def webhook():
         return jsonify({"status": "ok"}), 200
 
     # 5. LIVE SESSION → forward to owner, skip the bot
-
     if incoming_number in live_sessions:
         if owner_number:
             msg_sid = send_whatsapp(
@@ -506,16 +580,16 @@ def webhook():
 
     # 6. CUSTOMER SELECTING AN OPTION
     if incoming_number in pending_selections:
-        pending = pending_selections.get(incoming_number)
-        options = pending["options"]
+        pending      = pending_selections.get(incoming_number)
+        options      = pending["options"]
         final_prices = pending["final_prices"]
-        parsed = pending["parsed"]
+        parsed       = pending["parsed"]
 
         choice = interpret_option_choice(incoming_message, options, final_prices)
 
         if choice is not None:
             chosen = options[choice]
-            price = final_prices[choice]
+            price  = final_prices[choice]
 
             cancel_followup(incoming_number)
             send_whatsapp(
@@ -540,64 +614,67 @@ def webhook():
 
             log_request({
                 "customer_number": incoming_number,
-                "raw_message": incoming_message,
-                "parsed": parsed,
-                "options": options,
-                "final_prices": final_prices,
-                "chosen_option": choice + 1,
-                "status": "confirmed"
+                "raw_message":     incoming_message,
+                "parsed":          parsed,
+                "options":         options,
+                "final_prices":    final_prices,
+                "chosen_option":   choice + 1,
+                "status":          "confirmed",
             })
 
             del pending_selections[incoming_number]
+            # Clear conversation — fresh start for their next request
+            conversations.pop(incoming_number, None)
+
         else:
             nums = " o ".join(str(i) for i in range(1, len(options) + 1))
             send_whatsapp(incoming_number, f"¿Cuál opción prefieres? Responde con el número ({nums}).")
 
         return jsonify({"status": "ok"}), 200
 
-    # 6.5 PENDING CONFIRMATION → customer confirming or correcting their request
-    if incoming_number in pending_confirmation:
-        pending = pending_confirmation[incoming_number]
-        msg_lower = incoming_message.strip().lower()
-        affirmative = msg_lower in [
-            "sí", "si", "correcto", "ok", "okey", "dale", "listo", "yes", "sip", "claro", "bueno", "va"
-        ]
+    # 6.5 CONFIRMING → customer confirming or correcting their queued request
+    conv = conversations.get(incoming_number)
+    if conv and conv.get("confirming"):
+        msg_lower   = incoming_message.strip().lower()
+        affirmative = msg_lower in {
+            "sí", "si", "correcto", "ok", "okey", "dale", "listo",
+            "yes", "sip", "claro", "bueno", "va"
+        }
+
         if affirmative:
-            del pending_confirmation[incoming_number]
+            conv["confirming"] = False
+            conv["state"]      = ConversationState.WAITING
+            queue = list(conv["request_queue"])
+            conv["request_queue"] = []
+
             thread = threading.Thread(
-                target=_run_sourcing,
-                args=(incoming_number, incoming_message, pending)
+                target=_run_multi_sourcing,
+                args=(incoming_number, incoming_message, queue)
             )
             thread.daemon = True
             thread.start()
+
         else:
-            correction = parse_correction(incoming_message, pending)
+            representative = conv["request_queue"][0] if conv["request_queue"] else {}
+            correction = parse_correction(incoming_message, representative)
+
             if correction:
-                updated = {
-                    **pending,
-                    **{k: v for k, v in correction.items()
-                       if k in ("part", "make", "model", "year") and v}
-                }
-                pending_confirmation[incoming_number] = updated
+                _apply_to_queue(conv["request_queue"], correction)
                 send_whatsapp(
                     incoming_number,
-                    generate_response("confirmation_summary", incoming_message, context={
-                        "part":  updated.get("part"),
-                        "make":  updated.get("make"),
-                        "model": updated.get("model"),
-                        "year":  updated.get("year"),
-                    })
+                    generate_queue_confirmation(conv["request_queue"])
                 )
             else:
                 send_whatsapp(
                     incoming_number,
                     generate_response("correction_reminder", incoming_message, context={
-                        "part":  pending.get("part"),
-                        "make":  pending.get("make"),
-                        "model": pending.get("model"),
-                        "year":  pending.get("year"),
+                        "part":  representative.get("part"),
+                        "make":  representative.get("make"),
+                        "model": representative.get("model"),
+                        "year":  representative.get("year"),
                     })
                 )
+
         return jsonify({"status": "ok"}), 200
 
     # 7. ALL OTHER MESSAGES → process in background
@@ -609,8 +686,6 @@ def webhook():
     thread.start()
 
     return jsonify({"status": "ok"}), 200
-
-
 
 
 @app.route("/dashboard", methods=["GET"])
