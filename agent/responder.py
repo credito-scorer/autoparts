@@ -13,7 +13,9 @@ Reglas:
 - No repitas lo que el cliente dijo
 - No expliques lo que vas a hacer, simplemente hazlo
 - Si pides información, pregunta una sola cosa a la vez
-- Usa emojis con moderación (1-2 máximo si aplica)"""
+- Usa emojis con moderación (1-2 máximo si aplica)
+- Después del primer mensaje, nunca uses frases de apertura como "¡Hola!", "Bienvenido" o "Gracias por escribir"
+- Las respuestas se vuelven más cortas y directas a medida que avanza la conversación"""
 
 SITUATION_PROMPTS = {
     "greeting": (
@@ -30,9 +32,12 @@ SITUATION_PROMPTS = {
         "Pídele que te diga la pieza, marca, modelo y año del vehículo."
     ),
     "part_not_found": (
-        "No encontramos la pieza que buscó el cliente. "
-        "Dale la noticia con empatía, ofrece avisarle si aparece algo, "
-        "y sugiere que nos dé más detalles si aplica."
+        "No encontramos la pieza solicitada. "
+        "Informa al cliente con empatía y SIEMPRE termina con un próximo paso concreto. "
+        "Prioridad: (a) ofrecerle avisarle en cuanto la consigamos, "
+        "(b) sugerir una alternativa compatible si existe, "
+        "(c) ofrecerle conectarlo con alguien del equipo. "
+        "Nunca termines solo con 'no la encontramos' — siempre hay un siguiente paso."
     ),
     "human_request": (
         "El cliente quiere hablar con una persona. "
@@ -96,24 +101,30 @@ def _build_missing_fields_instruction(context: dict) -> str:
     missing: list = context.get("missing", [])
     is_first = context.get("is_first_message", False)
 
+    # Ask for exactly ONE field — the first missing in priority order (part > make > model > year)
+    next_field = missing[0] if missing else "part"
     known_parts = [f"{k} = {v}" for k, v in known.items() if v]
-    missing_labels = [FIELD_LABELS.get(f, f) for f in missing]
-
     known_str = ", ".join(known_parts) if known_parts else "nada aún"
-    missing_str = " y ".join(missing_labels)
 
     brevity = (
-        "Es el primer intercambio — sé amable pero directo."
-        if is_first
-        else "Ya estamos en conversación. Sé muy breve, una sola frase."
+        "Sé amable pero directo." if is_first
+        else "Sé muy breve, una sola frase corta."
     )
 
+    if next_field == "make":
+        field_instruction = (
+            "Pregunta por la marca del vehículo con ejemplos inline — "
+            "una pregunta natural con anclas, sin lista numerada. "
+            "Ejemplo del formato: '¿Es Toyota, Hyundai, Nissan, Honda u otra marca?'"
+        )
+    else:
+        field_label = FIELD_LABELS.get(next_field, next_field)
+        field_instruction = f"Pregunta SOLO por {field_label}. Una sola frase corta."
+
     return (
-        f"El cliente está pidiendo un repuesto. "
-        f"Ya sabemos: {known_str}. "
-        f"Aún nos falta: {missing_str}. "
-        f"Pregunta SOLO lo que falta. "
-        f"NO saludos, NO re-presentación, NO listas. {brevity}"
+        f"El cliente está pidiendo un repuesto. Ya sabemos: {known_str}. "
+        f"{field_instruction} "
+        f"NO saludos, NO re-presentación, NO listas numeradas. {brevity}"
     )
 
 

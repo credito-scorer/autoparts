@@ -31,6 +31,7 @@ Extrae TODA la información de repuesto o vehículo que encuentres y responde Ú
     "confidence": "high/medium/low según qué tan clara fue la solicitud"
 }}
 
+Regla crítica: Si un campo no está claramente indicado en el mensaje, devuelve null. Nunca inferas ni adivines. Solo extrae lo que el cliente dijo explícitamente.
 Devuelve el JSON con los campos que puedas extraer (los demás en null).
 Responde con null SOLO si el mensaje es puramente conversacional (saludo, ok, gracias, etc.) sin ninguna mención de piezas o vehículos.
 No incluyas explicaciones, solo el JSON."""
@@ -78,7 +79,8 @@ def extract_partial(message: str, known: dict) -> dict | None:
         f"Un cliente está pidiendo un repuesto. Ya sabemos: {known_str}. "
         f"Aún nos falta: {missing_str}.\n\n"
         f"El cliente envió este nuevo mensaje: \"{message}\"\n\n"
-        f"Extrae SOLO los campos faltantes que el cliente mencione. "
+        f"Extrae SOLO los campos faltantes que el cliente mencione explícitamente. "
+        f"Regla crítica: Si un campo no está claramente indicado, no lo incluyas. Solo extrae lo que el cliente dijo. "
         f"Responde con JSON con solo esos campos (ej: {{\"model\": \"Hilux\", \"year\": \"2008\"}}). "
         f"Si el mensaje no aporta ningún campo nuevo, responde con null. "
         f"No incluyas campos ya conocidos. Solo el JSON."
