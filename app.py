@@ -1,7 +1,9 @@
 import os
 import time
+import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
@@ -33,14 +35,51 @@ from connectors.local_store import (
 
 load_dotenv()
 
+PANAMA_TZ    = timezone(timedelta(hours=-5))
+STARTUP_TIME = datetime.now(PANAMA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
 app = Flask(__name__)
 
-pending_approvals     = {}
-pending_selections    = {}
-approval_message_map  = {}
+pending_approvals      = {}
+pending_selections     = {}
+approval_message_map   = {}
 escalation_message_map = {}
-live_sessions         = {}
-pending_live_offers   = {}
+live_sessions          = {}
+pending_live_offers    = {}
+
+_error_cooldown: dict = {}
+ALERT_COOLDOWN  = 60  # seconds between alerts for the same error type
+
+
+# ── Error alerting ────────────────────────────────────────────────────────────
+
+def _panama_now() -> str:
+    return datetime.now(PANAMA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _send_error_alert(endpoint: str, exc: Exception) -> None:
+    """Send a WhatsApp alert to the owner on unhandled exception (with cooldown)."""
+    error_type = type(exc).__name__
+    now = time.time()
+    if now - _error_cooldown.get(error_type, 0) < ALERT_COOLDOWN:
+        return
+    _error_cooldown[error_type] = now
+
+    owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    if not owner:
+        return
+
+    msg = (
+        f"⚠️ *Zeli Bot Error*\n\n"
+        f"📍 Endpoint: {endpoint}\n"
+        f"❌ Error: {error_type}: {exc}\n"
+        f"🕐 Hora: {_panama_now()}\n\n"
+        f"Revisa Railway logs para el traceback completo."
+    )
+    try:
+        send_whatsapp(owner, msg)
+    except Exception:
+        pass  # Never recurse if the alert itself fails
 
 
 # ── Conversation state machine ─────────────────────────────────────────────────
@@ -441,6 +480,15 @@ def webhook_verify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    try:
+        return _webhook_handler()
+    except Exception as exc:
+        traceback.print_exc()
+        _send_error_alert("/webhook", exc)
+        return jsonify({"status": "ok"}), 200
+
+
+def _webhook_handler():
     data = request.get_json()
 
     try:
@@ -751,7 +799,35 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "running", "service": "AutoParts Trading Co."}, 200
+    return {
+        "status":               "running",
+        "service":              "AutoParts Trading Co.",
+        "active_conversations": len(conversations),
+        "pending_approvals":    len(pending_approvals),
+        "uptime_since":         STARTUP_TIME,
+    }, 200
+
+
+# ── Startup notification ───────────────────────────────────────────────────────
+
+def _send_startup_notification() -> None:
+    owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    if not owner:
+        return
+    try:
+        send_whatsapp(
+            owner,
+            f"✅ *Zeli Bot Online*\n"
+            f"🕐 {STARTUP_TIME}\n"
+            f"🚀 Producción activa — autoparts-production.up.railway.app"
+        )
+        print("📱 Startup notification sent")
+    except Exception as e:
+        print(f"⚠️ Startup notification failed: {e}")
+
+
+_startup_thread = threading.Thread(target=_send_startup_notification, daemon=True)
+_startup_thread.start()
 
 
 if __name__ == "__main__":
