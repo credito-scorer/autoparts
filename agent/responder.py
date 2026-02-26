@@ -64,6 +64,33 @@ FIELD_LABELS = {
 WAIT_ACKNOWLEDGMENT = "Claro, tómate tu tiempo. Aquí estamos cuando estés listo. 👍"
 
 
+def _build_confirmation_instruction(context: dict) -> str:
+    part  = context.get("part",  "?")
+    make  = context.get("make",  "?")
+    model = context.get("model", "?")
+    year  = context.get("year",  "?")
+    return (
+        f"Genera un resumen de confirmación del pedido para el cliente. "
+        f"Pieza: {part}. Vehículo: {make} {model} {year}. "
+        f"Usa 🔩 para la pieza y 🚗 para el vehículo. "
+        f"Pide que confirmen con 'sí' o que corrijan lo que esté mal. "
+        f"Sé claro y conciso. No uses frases largas."
+    )
+
+
+def _build_correction_reminder_instruction(context: dict) -> str:
+    part  = context.get("part",  "?")
+    make  = context.get("make",  "?")
+    model = context.get("model", "?")
+    year  = context.get("year",  "?")
+    return (
+        f"El cliente tiene este pedido esperando confirmación: "
+        f"{part} para {make} {model} {year}. "
+        f"Respondió algo que no entendemos. "
+        f"Recuérdale en una frase que confirme con 'sí' o corrija lo que esté mal."
+    )
+
+
 def _build_missing_fields_instruction(context: dict) -> str:
     known: dict = context.get("known", {})
     missing: list = context.get("missing", [])
@@ -96,6 +123,10 @@ def generate_response(situation: str, customer_message: str, context: dict = {})
 
     if situation == "missing_fields":
         instruction = _build_missing_fields_instruction(context)
+    elif situation == "confirmation_summary":
+        instruction = _build_confirmation_instruction(context)
+    elif situation == "correction_reminder":
+        instruction = _build_correction_reminder_instruction(context)
     else:
         instruction = SITUATION_PROMPTS.get(situation, SITUATION_PROMPTS["unknown"])
 

@@ -103,6 +103,42 @@ def extract_partial(message: str, known: dict) -> dict | None:
         return None
 
 
+def parse_correction(message: str, current: dict) -> dict | None:
+    """
+    Given a correction message and the current complete request,
+    return which field(s) changed and their new values.
+    """
+    prompt = (
+        f"Tenemos este pedido de repuesto:\n"
+        f"Pieza: {current.get('part')}\n"
+        f"Marca: {current.get('make')}\n"
+        f"Modelo: {current.get('model')}\n"
+        f"Año: {current.get('year')}\n\n"
+        f"El cliente está corrigiendo algo: \"{message}\"\n\n"
+        f"Identifica qué campo(s) cambia y el nuevo valor. "
+        f"Responde SOLO con JSON de los campos corregidos. "
+        f"Ejemplo: {{\"year\": \"2000\"}} o {{\"part\": \"pastillas de freno\"}}. "
+        f"Si no es una corrección clara, responde con null."
+    )
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=80,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        if not raw or raw == "null":
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 def detect_needs_human(message: str) -> bool:
     """
     Uses Claude to detect if a customer is frustrated, confused,

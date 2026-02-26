@@ -3,7 +3,7 @@ import time
 import threading
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
-from agent.parser import parse_request, extract_partial, detect_needs_human
+from agent.parser import parse_request, extract_partial, parse_correction, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
@@ -42,6 +42,9 @@ pending_live_offers = {}
 # Partial request state: customer number → {part, make, model, year, last_seen}
 pending_requests: dict = {}
 STATE_TTL = 1800  # 30 minutes
+
+# Complete requests awaiting customer confirmation before sourcing
+pending_confirmation: dict = {}
 
 
 def _get_request_state(number: str) -> dict | None:
@@ -174,6 +177,62 @@ def is_human_request(message: str) -> bool:
     return any(phrase in msg for phrase in HUMAN_REQUEST)
 
 
+def _run_sourcing(incoming_number: str, incoming_message: str, parsed: dict) -> None:
+    """Run sourcing + approval flow for a confirmed, complete request."""
+    send_whatsapp(
+        incoming_number,
+        "🔩 Recibido. Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
+    )
+    schedule_followup(incoming_number, delay=300)
+
+    log_request({
+        "customer_number": incoming_number,
+        "raw_message": incoming_message,
+        "parsed": parsed,
+        "status": "received"
+    })
+
+    results = source_parts(parsed)
+
+    if not results:
+        cancel_followup(incoming_number)
+        send_whatsapp(
+            incoming_number,
+            generate_response("part_not_found", incoming_message, context={
+                "pieza": parsed.get("part"),
+                "vehículo": f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')}"
+            })
+        )
+        log_request({
+            "customer_number": incoming_number,
+            "raw_message": incoming_message,
+            "parsed": parsed,
+            "status": "not_found"
+        })
+        return
+
+    options = build_options(results, parsed)
+
+    pending_selections[incoming_number] = {
+        "options": options,
+        "parsed": parsed,
+        "final_prices": [opt["suggested_price"] for opt in options]
+    }
+
+    send_for_approval(
+        options, parsed, incoming_number,
+        pending_approvals, approval_message_map
+    )
+
+    log_request({
+        "customer_number": incoming_number,
+        "raw_message": incoming_message,
+        "parsed": parsed,
+        "options": options,
+        "status": "pending_approval"
+    })
+
+
 def _send_missing_prompt(number: str, message: str, state: dict, is_first: bool) -> None:
     known = {k: v for k, v in state.items() if v and k in ("part", "make", "model", "year")}
     missing = _missing_fields(state)
@@ -272,59 +331,17 @@ def process_customer_request(incoming_number: str, incoming_message: str):
             send_whatsapp(incoming_number, generate_response("unknown", incoming_message))
         return
 
-    # ── Sourcing flow (parsed is complete) ───────────────────────────────────
+    # ── Request complete → ask customer to confirm before sourcing ────────────
+    pending_confirmation[incoming_number] = dict(parsed)
     send_whatsapp(
         incoming_number,
-        "🔩 Recibido. Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"
-    )
-    schedule_followup(incoming_number, delay=300)
-
-    log_request({
-        "customer_number": incoming_number,
-        "raw_message": incoming_message,
-        "parsed": parsed,
-        "status": "received"
-    })
-
-    results = source_parts(parsed)
-
-    if not results:
-        cancel_followup(incoming_number)
-        send_whatsapp(
-            incoming_number,
-            generate_response("part_not_found", incoming_message, context={
-                "pieza": parsed.get("part"),
-                "vehículo": f"{parsed.get('make')} {parsed.get('model')} {parsed.get('year')}"
-            })
-        )
-        log_request({
-            "customer_number": incoming_number,
-            "raw_message": incoming_message,
-            "parsed": parsed,
-            "status": "not_found"
+        generate_response("confirmation_summary", incoming_message, context={
+            "part":  parsed.get("part"),
+            "make":  parsed.get("make"),
+            "model": parsed.get("model"),
+            "year":  parsed.get("year"),
         })
-        return
-
-    options = build_options(results, parsed)
-
-    pending_selections[incoming_number] = {
-        "options": options,
-        "parsed": parsed,
-        "final_prices": [opt["suggested_price"] for opt in options]
-    }
-
-    send_for_approval(
-        options, parsed, incoming_number,
-        pending_approvals, approval_message_map
     )
-
-    log_request({
-        "customer_number": incoming_number,
-        "raw_message": incoming_message,
-        "parsed": parsed,
-        "options": options,
-        "status": "pending_approval"
-    })
 
 
 @app.route("/webhook", methods=["GET"])
@@ -535,6 +552,51 @@ def webhook():
             else:
                 send_whatsapp(incoming_number, "Por favor responde con 1, 2 o 3.")
 
+        return jsonify({"status": "ok"}), 200
+
+    # 6.5 PENDING CONFIRMATION → customer confirming or correcting their request
+    if incoming_number in pending_confirmation:
+        pending = pending_confirmation[incoming_number]
+        msg_lower = incoming_message.strip().lower()
+        affirmative = msg_lower in [
+            "sí", "si", "correcto", "ok", "okey", "dale", "listo", "yes", "sip", "claro", "bueno", "va"
+        ]
+        if affirmative:
+            del pending_confirmation[incoming_number]
+            thread = threading.Thread(
+                target=_run_sourcing,
+                args=(incoming_number, incoming_message, pending)
+            )
+            thread.daemon = True
+            thread.start()
+        else:
+            correction = parse_correction(incoming_message, pending)
+            if correction:
+                updated = {
+                    **pending,
+                    **{k: v for k, v in correction.items()
+                       if k in ("part", "make", "model", "year") and v}
+                }
+                pending_confirmation[incoming_number] = updated
+                send_whatsapp(
+                    incoming_number,
+                    generate_response("confirmation_summary", incoming_message, context={
+                        "part":  updated.get("part"),
+                        "make":  updated.get("make"),
+                        "model": updated.get("model"),
+                        "year":  updated.get("year"),
+                    })
+                )
+            else:
+                send_whatsapp(
+                    incoming_number,
+                    generate_response("correction_reminder", incoming_message, context={
+                        "part":  pending.get("part"),
+                        "make":  pending.get("make"),
+                        "model": pending.get("model"),
+                        "year":  pending.get("year"),
+                    })
+                )
         return jsonify({"status": "ok"}), 200
 
     # 7. ALL OTHER MESSAGES → process in background
