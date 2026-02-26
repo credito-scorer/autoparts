@@ -1,8 +1,9 @@
 import os
+import time
 import threading
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
-from agent.parser import parse_request, detect_needs_human
+from agent.parser import parse_request, extract_partial, detect_needs_human
 from agent.sourcing import source_parts
 from agent.recommender import build_options
 from agent.approval import send_for_approval, handle_approval, send_whatsapp
@@ -37,6 +38,58 @@ live_sessions = {}
 
 # Customers who were offered a live session and we're waiting for their confirmation
 pending_live_offers = {}
+
+# Partial request state: customer number → {part, make, model, year, last_seen}
+pending_requests: dict = {}
+STATE_TTL = 1800  # 30 minutes
+
+
+def _get_request_state(number: str) -> dict | None:
+    state = pending_requests.get(number)
+    if not state:
+        return None
+    if time.time() - state.get("last_seen", 0) > STATE_TTL:
+        pending_requests.pop(number, None)
+        return None
+    return state
+
+
+def _update_request_state(number: str, fields: dict) -> dict:
+    existing = pending_requests.get(number, {})
+    updated = {
+        "part":  str(fields.get("part")  or existing.get("part")  or "").strip(),
+        "make":  str(fields.get("make")  or existing.get("make")  or "").strip(),
+        "model": str(fields.get("model") or existing.get("model") or "").strip(),
+        "year":  str(fields.get("year")  or existing.get("year")  or "").strip(),
+        "last_seen": time.time(),
+    }
+    pending_requests[number] = updated
+    return updated
+
+
+def _clear_request_state(number: str) -> None:
+    pending_requests.pop(number, None)
+
+
+def _is_request_complete(state: dict) -> bool:
+    return all(state.get(f) for f in ("part", "make", "model", "year"))
+
+
+def _missing_fields(state: dict) -> list:
+    return [f for f in ("part", "make", "model", "year") if not state.get(f)]
+
+
+def _merge_with_state(new_fields: dict, existing: dict | None) -> dict:
+    """Merge parsed fields with existing state. New non-empty values take priority."""
+    if not existing:
+        return new_fields
+    return {
+        "part":  str(new_fields.get("part")  or existing.get("part")  or "").strip(),
+        "make":  str(new_fields.get("make")  or existing.get("make")  or "").strip(),
+        "model": str(new_fields.get("model") or existing.get("model") or "").strip(),
+        "year":  str(new_fields.get("year")  or existing.get("year")  or "").strip(),
+        **{k: v for k, v in new_fields.items() if k not in ("part", "make", "model", "year")},
+    }
 
 GREETINGS = ["hola", "buenas", "buenos dias", "buenos días", "buenas tardes",
              "buenas noches", "hi", "hello", "hey"]
@@ -121,10 +174,63 @@ def is_human_request(message: str) -> bool:
     return any(phrase in msg for phrase in HUMAN_REQUEST)
 
 
+def _send_missing_prompt(number: str, message: str, state: dict, is_first: bool) -> None:
+    known = {k: v for k, v in state.items() if v and k in ("part", "make", "model", "year")}
+    missing = _missing_fields(state)
+    send_whatsapp(number, generate_response("missing_fields", message, {
+        "known": known,
+        "missing": missing,
+        "is_first_message": is_first,
+    }))
+
+
 def process_customer_request(incoming_number: str, incoming_message: str):
+    existing_state = _get_request_state(incoming_number)
     parsed = parse_request(incoming_message)
 
-    if not parsed:
+    # ── Conversation state tracking ──────────────────────────────────────────
+    # Has any part/vehicle info? (partial or complete parse)
+    has_part_info = parsed is not None and any(
+        parsed.get(f) for f in ("part", "make", "model", "year")
+    )
+
+    if has_part_info:
+        merged = _merge_with_state(parsed, existing_state)
+        if _is_request_complete(merged):
+            _clear_request_state(incoming_number)
+            parsed = merged          # fall through to sourcing
+        else:
+            _update_request_state(incoming_number, merged)
+            _send_missing_prompt(incoming_number, incoming_message, merged, existing_state is None)
+            return
+
+    elif existing_state:
+        # No structured parse but we have state — try to extract new fields from this message
+        partial = extract_partial(incoming_message, existing_state)
+        if partial:
+            merged = _merge_with_state(partial, existing_state)
+            if _is_request_complete(merged):
+                _clear_request_state(incoming_number)
+                parsed = merged      # fall through to sourcing
+            else:
+                _update_request_state(incoming_number, merged)
+                _send_missing_prompt(incoming_number, incoming_message, merged, False)
+                return
+        else:
+            # Message didn't add info — handle conversationally but nudge toward completion
+            if is_wait(incoming_message):
+                send_whatsapp(incoming_number, generate_response("wait_acknowledgment", incoming_message))
+            elif is_thanks(incoming_message):
+                _clear_request_state(incoming_number)
+                cancel_followup(incoming_number)
+                send_whatsapp(incoming_number, generate_response("thanks", incoming_message))
+            else:
+                # Re-prompt for the missing fields (brief, no re-greeting)
+                _send_missing_prompt(incoming_number, incoming_message, existing_state, False)
+            return
+
+    # ── Purely conversational (no part info, no existing state) ─────────────
+    if parsed is None:
         if is_human_request(incoming_message):
             live_sessions[incoming_number] = True
             cancel_followup(incoming_number)
@@ -144,55 +250,29 @@ def process_customer_request(incoming_number: str, incoming_message: str):
                     escalation_message_map[msg_sid] = incoming_number
                     print(f"📋 Live session mapped: {msg_sid} → {incoming_number}")
 
-            send_whatsapp(
-                incoming_number,
-                generate_response("human_request", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("human_request", incoming_message))
+
         elif is_greeting(incoming_message):
-            send_whatsapp(
-                incoming_number,
-                generate_response("greeting", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("greeting", incoming_message))
         elif is_secondary_greeting(incoming_message):
-            send_whatsapp(
-                incoming_number,
-                generate_response("secondary_greeting", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("secondary_greeting", incoming_message))
         elif is_wait(incoming_message):
-            send_whatsapp(
-                incoming_number,
-                generate_response("wait_acknowledgment", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("wait_acknowledgment", incoming_message))
         elif is_ack(incoming_message):
-            send_whatsapp(
-                incoming_number,
-                generate_response("ack", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("ack", incoming_message))
         elif is_thanks(incoming_message):
             cancel_followup(incoming_number)
-            send_whatsapp(
-                incoming_number,
-                generate_response("thanks", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("thanks", incoming_message))
         elif is_vague_intent(incoming_message):
-            send_whatsapp(
-                incoming_number,
-                generate_response("vague_intent", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("vague_intent", incoming_message))
         elif detect_needs_human(incoming_message):
             pending_live_offers[incoming_number] = True
-            send_whatsapp(
-                incoming_number,
-                generate_response("human_request", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("human_request", incoming_message))
         else:
-            send_whatsapp(
-                incoming_number,
-                generate_response("unknown", incoming_message)
-            )
+            send_whatsapp(incoming_number, generate_response("unknown", incoming_message))
         return
 
-    # It's a real part request — acknowledge and schedule a follow-up
+    # ── Sourcing flow (parsed is complete) ───────────────────────────────────
     send_whatsapp(
         incoming_number,
         "🔩 Recibido. Estamos buscando tu pieza, te confirmamos en unos minutos. ⏳"

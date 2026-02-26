@@ -54,30 +54,57 @@ SITUATION_PROMPTS = {
     ),
 }
 
+FIELD_LABELS = {
+    "part": "la pieza",
+    "make": "la marca del vehículo",
+    "model": "el modelo",
+    "year": "el año",
+}
+
 WAIT_ACKNOWLEDGMENT = "Claro, tómate tu tiempo. Aquí estamos cuando estés listo. 👍"
+
+
+def _build_missing_fields_instruction(context: dict) -> str:
+    known: dict = context.get("known", {})
+    missing: list = context.get("missing", [])
+    is_first = context.get("is_first_message", False)
+
+    known_parts = [f"{k} = {v}" for k, v in known.items() if v]
+    missing_labels = [FIELD_LABELS.get(f, f) for f in missing]
+
+    known_str = ", ".join(known_parts) if known_parts else "nada aún"
+    missing_str = " y ".join(missing_labels)
+
+    brevity = (
+        "Es el primer intercambio — sé amable pero directo."
+        if is_first
+        else "Ya estamos en conversación. Sé muy breve, una sola frase."
+    )
+
+    return (
+        f"El cliente está pidiendo un repuesto. "
+        f"Ya sabemos: {known_str}. "
+        f"Aún nos falta: {missing_str}. "
+        f"Pregunta SOLO lo que falta. "
+        f"NO saludos, NO re-presentación, NO listas. {brevity}"
+    )
 
 
 def generate_response(situation: str, customer_message: str, context: dict = {}) -> str:
     if situation == "wait_acknowledgment":
         return WAIT_ACKNOWLEDGMENT
 
-    situation_instruction = SITUATION_PROMPTS.get(situation, SITUATION_PROMPTS["unknown"])
+    if situation == "missing_fields":
+        instruction = _build_missing_fields_instruction(context)
+    else:
+        instruction = SITUATION_PROMPTS.get(situation, SITUATION_PROMPTS["unknown"])
 
-    context_text = ""
-    if context:
-        context_text = "\n\nContexto adicional:\n" + "\n".join(
-            f"- {k}: {v}" for k, v in context.items()
-        )
-
-    prompt = (
-        f"{situation_instruction}{context_text}\n\n"
-        f"Mensaje del cliente: \"{customer_message}\""
-    )
+    prompt = f"{instruction}\n\nMensaje del cliente: \"{customer_message}\""
 
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=200,
+            max_tokens=150,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}]
         )
