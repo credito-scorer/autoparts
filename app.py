@@ -279,6 +279,30 @@ def is_goodbye(message: str) -> bool:
     return msg in GOODBYE_PHRASES
 
 
+def _is_affirmative(message: str) -> bool:
+    """
+    Detect yes/confirmation in a WhatsApp message.
+    Handles exact matches, si+i variants (sii, siii, síii…), and
+    affirmation-prefixed phrases (dale pues, ok perfecto, sí claro, etc.).
+    """
+    msg = message.lower().strip().rstrip("!")
+    # Exact matches
+    if msg in {
+        "sí", "si", "dale", "ok", "okey", "correcto", "listo",
+        "yes", "sip", "claro", "bueno", "va", "exacto", "eso", "ese",
+        "perfecto", "excelente", "genial",
+    }:
+        return True
+    # "sii", "siii", "síi", "síii", etc. — strip trailing i's
+    base = msg.rstrip("i")
+    if base in ("s", "si", "sí"):
+        return True
+    # Affirmation + trailing words: "dale pues", "ok perfecto", "sí correcto"
+    return any(msg.startswith(p + " ") for p in (
+        "sí", "si", "dale", "ok", "okey", "claro", "correcto", "sip", "listo"
+    ))
+
+
 # ── Escalation helper ──────────────────────────────────────────────────────────
 
 def _handle_human_escalation(number: str, message: str) -> None:
@@ -683,11 +707,7 @@ def _webhook_handler():
     # 6.5 CONFIRMING → customer confirming or correcting their queued request
     conv = conversations.get(incoming_number)
     if conv and conv.get("confirming"):
-        msg_lower   = incoming_message.strip().lower()
-        affirmative = msg_lower in {
-            "sí", "si", "correcto", "ok", "okey", "dale", "listo",
-            "yes", "sip", "claro", "bueno", "va"
-        }
+        affirmative = _is_affirmative(incoming_message)
 
         if affirmative:
             conv["confirming"] = False
