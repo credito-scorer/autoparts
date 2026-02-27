@@ -381,6 +381,28 @@ def render_dashboard() -> str:
         }
         .empty { text-align: center; padding: 40px; color: #aaa; font-size: 0.9rem; }
 
+        /* ── Collapsible sections ── */
+        .sec-wrapper { background: white; border-radius: 8px;
+                       box-shadow: 0 1px 4px rgba(0,0,0,.08);
+                       margin: 14px 16px 0; overflow: hidden; }
+        .sec-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; user-select: none;
+            padding: 13px 16px; font-weight: 600; font-size: 0.92rem;
+            color: #1a1a2e; transition: background .15s;
+        }
+        .sec-toggle:hover { background: #f8f9ff; }
+        .sec-toggle .sec-title { display: flex; align-items: center; gap: 8px; }
+        .sec-toggle .sec-count { font-size: 0.75rem; color: #888;
+                                  font-weight: 400; margin-left: 4px; }
+        .chevron { font-size: 0.8rem; color: #aaa; transition: transform .25s; flex-shrink: 0; }
+        .sec-body { border-top: 1px solid #f0f0f0; }
+        .sec-body.collapsed { display: none; }
+
+        /* Table self-scrolls vertically — no page scroll needed for long lists */
+        .table-scroll { overflow-x: auto; overflow-y: auto;
+                        max-height: 520px; -webkit-overflow-scrolling: touch; }
+
         /* ── Delivery ── */
         .deliver-btn {
             padding: 7px 12px; background: #1a1a2e; color: white; border: none;
@@ -393,12 +415,11 @@ def render_dashboard() -> str:
         .delivered-tag small { color: #888; font-weight: 400; display: block; }
 
         /* ── Below-body sections ── */
-        .sections { padding: 0 16px 32px; display: flex; flex-direction: column; gap: 20px; }
+        .sections { padding: 0 16px 32px; display: flex; flex-direction: column; gap: 16px; }
         .section-card {
             background: white; border-radius: 10px;
-            box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 20px;
+            box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; padding: 0;
         }
-        .section-heading { font-size: 1rem; font-weight: 700; color: #1a1a2e; margin-bottom: 4px; }
         .section-sub { font-size: 0.78rem; color: #888; margin-bottom: 14px; }
 
         /* Period toggle */
@@ -488,8 +509,9 @@ def render_dashboard() -> str:
             td, th { padding: 8px 8px; font-size: 0.8rem; }
 
             /* Sections */
-            .sections { padding: 0 10px 24px; gap: 14px; }
-            .section-card { padding: 14px 12px; }
+            .sections { padding: 0 10px 24px; gap: 12px; }
+            .sec-wrapper { margin: 10px 10px 0; }
+            .sec-toggle { padding: 12px 14px; font-size: 0.88rem; }
 
             /* Period toggle: full-width pills */
             .period-btn { flex: 1; min-height: 44px; text-align: center; font-size: 0.85rem; }
@@ -525,7 +547,7 @@ def render_dashboard() -> str:
                 border-right: none; border-bottom: 1px solid #e8e8e8;
             }
             .main { overflow: visible; }
-            .table-scroll { overflow-x: auto; }
+            .table-scroll { overflow-x: auto; overflow-y: auto; max-height: 420px; }
             table { min-width: 700px; }
             .perf-card  { flex: 1 1 calc(33.33% - 8px); }
             .funnel { flex-direction: column; gap: 2px; }
@@ -541,12 +563,12 @@ def render_dashboard() -> str:
 
         /* ── Desktop: 1024px+ ── */
         @media (min-width: 1024px) {
-            /* Page scrolls normally — body is NOT locked to viewport height.
-               .body gets a fixed height so it stays visible and doesn't get
-               squished by the new sections below it. */
-            body { height: auto; overflow: visible; }
-            .body { height: 60vh; min-height: 450px; flex-shrink: 0; overflow: hidden; }
-            .main { overflow: auto; }
+            body { height: auto; }
+            /* .body no longer needs a fixed height — table self-scrolls via max-height */
+            .body { flex-shrink: 0; overflow: visible; }
+            .main { overflow: visible; }
+            /* Customer list bounded so sidebar doesn't grow unboundedly */
+            .customer-list { max-height: 530px; }
             .funnel { flex-direction: row; }
             .funnel-stage { text-align: center; }
             .funnel-arrow { transform: none; }
@@ -564,6 +586,15 @@ def render_dashboard() -> str:
     )
 
     JS_LOGIC = r"""
+    /* ── Collapsible sections ── */
+    function toggleSection(id) {
+        var body = document.getElementById('sec-' + id);
+        var chev = document.getElementById('chev-' + id);
+        if (!body) return;
+        var isCollapsed = body.classList.toggle('collapsed');
+        chev.style.transform = isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+    }
+
     /* ── Existing: filter & search ── */
     let active = null;
 
@@ -767,43 +798,53 @@ def render_dashboard() -> str:
 <!-- Section 1: Performance metrics bar -->
 <div class="perf-metrics">{perf_html}</div>
 
-<!-- Existing body: sidebar + interaction table -->
-<div class="body">
-    <div class="sidebar">
-        <div class="sidebar-header">
-            <input type="text" id="search" placeholder="Buscar cliente..."
-                   oninput="searchClients(this.value)">
-        </div>
-        <button class="all-btn active" id="all-btn" onclick="showAll()">
-            Todos los clientes ({len(customer_list)})
-        </button>
-        <div class="customer-list" id="customer-list">
-            {sidebar_items}
-        </div>
+<!-- Interactions: collapsible wrapper -->
+<div class="sec-wrapper">
+    <div class="sec-toggle" onclick="toggleSection('interactions')">
+        <span class="sec-title">
+            📋 Todas las interacciones
+            <span class="sec-count">({total} registros)</span>
+        </span>
+        <span class="chevron" id="chev-interactions">▼</span>
     </div>
-
-    <div class="main">
-        <div class="table-wrap">
-            <div class="table-title" id="table-title">Todas las interacciones ({total})</div>
-            <div class="table-scroll">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Fecha</th>
-                            <th>Cliente</th>
-                            <th>Mensaje</th>
-                            <th>Pieza</th>
-                            <th>Vehículo</th>
-                            <th>Opciones</th>
-                            <th>Precio / Elección</th>
-                            <th>Estado</th>
-                            <th>Entrega</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tbody">{row_html}</tbody>
-                </table>
+    <div class="sec-body" id="sec-interactions">
+        <div class="body">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <input type="text" id="search" placeholder="Buscar cliente..."
+                           oninput="searchClients(this.value)">
+                </div>
+                <button class="all-btn active" id="all-btn" onclick="showAll()">
+                    Todos los clientes ({len(customer_list)})
+                </button>
+                <div class="customer-list" id="customer-list">
+                    {sidebar_items}
+                </div>
             </div>
-            <div class="empty" id="empty" style="display:none">Sin resultados</div>
+            <div class="main">
+                <div class="table-wrap">
+                    <div class="table-title" id="table-title">Todas las interacciones ({total})</div>
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Cliente</th>
+                                    <th>Mensaje</th>
+                                    <th>Pieza</th>
+                                    <th>Vehículo</th>
+                                    <th>Opciones</th>
+                                    <th>Precio / Elección</th>
+                                    <th>Estado</th>
+                                    <th>Entrega</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody">{row_html}</tbody>
+                        </table>
+                    </div>
+                    <div class="empty" id="empty" style="display:none">Sin resultados</div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -813,30 +854,35 @@ def render_dashboard() -> str:
 
     <!-- Section 2: Sourcing Intelligence -->
     <div class="section-card">
-        <div class="section-heading">🔍 Inteligencia de Sourcing</div>
-        <div class="section-sub">Piezas más solicitadas y gaps de inventario</div>
-        <div class="period-toggle">
-            <button class="period-btn active" data-period="week"  onclick="setSourcingPeriod('week')">Esta semana</button>
-            <button class="period-btn"        data-period="month" onclick="setSourcingPeriod('month')">Este mes</button>
-            <button class="period-btn"        data-period="all"   onclick="setSourcingPeriod('all')">Todo</button>
+        <div class="sec-toggle" onclick="toggleSection('sourcing')">
+            <span class="sec-title">🔍 Inteligencia de Sourcing</span>
+            <span class="chevron" id="chev-sourcing">▼</span>
         </div>
-        <div class="two-col">
-            <div class="col">
-                <div class="col-heading">📦 Piezas más solicitadas</div>
-                <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-                    <table class="intel-table">
-                        <thead><tr><th>Pieza</th><th>Solicitudes</th><th>Éxito %</th></tr></thead>
-                        <tbody id="top-parts-body"></tbody>
-                    </table>
-                </div>
+        <div class="sec-body" id="sec-sourcing" style="padding:16px 20px 20px">
+            <div class="section-sub" style="margin-top:4px">Piezas más solicitadas y gaps de inventario</div>
+            <div class="period-toggle">
+                <button class="period-btn active" data-period="week"  onclick="setSourcingPeriod('week')">Esta semana</button>
+                <button class="period-btn"        data-period="month" onclick="setSourcingPeriod('month')">Este mes</button>
+                <button class="period-btn"        data-period="all"   onclick="setSourcingPeriod('all')">Todo</button>
             </div>
-            <div class="col">
-                <div class="col-heading">❌ Gaps de inventario</div>
-                <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-                    <table class="intel-table">
-                        <thead><tr><th>Pieza</th><th>Make</th><th>Sin resultado</th></tr></thead>
-                        <tbody id="gaps-body"></tbody>
-                    </table>
+            <div class="two-col">
+                <div class="col">
+                    <div class="col-heading">📦 Piezas más solicitadas</div>
+                    <div style="overflow-x:auto;overflow-y:auto;max-height:320px;-webkit-overflow-scrolling:touch">
+                        <table class="intel-table">
+                            <thead><tr><th>Pieza</th><th>Solicitudes</th><th>Éxito %</th></tr></thead>
+                            <tbody id="top-parts-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="col-heading">❌ Gaps de inventario</div>
+                    <div style="overflow-x:auto;overflow-y:auto;max-height:320px;-webkit-overflow-scrolling:touch">
+                        <table class="intel-table">
+                            <thead><tr><th>Pieza</th><th>Make</th><th>Sin resultado</th></tr></thead>
+                            <tbody id="gaps-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -844,23 +890,33 @@ def render_dashboard() -> str:
 
     <!-- Section 3: Conversion Funnel -->
     <div class="section-card">
-        <div class="section-heading">🔁 Embudo de Conversión</div>
-        <div class="section-sub">Del primer mensaje a la entrega</div>
-        <div class="funnel-wrap">
-            <div class="funnel">{funnel_html}</div>
+        <div class="sec-toggle" onclick="toggleSection('funnel')">
+            <span class="sec-title">🔁 Embudo de Conversión</span>
+            <span class="chevron" id="chev-funnel">▼</span>
+        </div>
+        <div class="sec-body" id="sec-funnel" style="padding:16px 20px 20px">
+            <div class="section-sub" style="margin-bottom:14px">Del primer mensaje a la entrega</div>
+            <div class="funnel-wrap">
+                <div class="funnel">{funnel_html}</div>
+            </div>
         </div>
     </div>
 
     <!-- Section 4: AI Insights -->
     <div class="section-card" id="ai-panel">
-        <div class="ai-header">📊 Análisis Semanal — Generado por IA</div>
-        <div class="ai-sub" id="ai-timestamp">Cargando...</div>
-        <div class="ai-content" id="ai-content">
-            <span class="ai-loading">El análisis se cargará automáticamente...</span>
+        <div class="sec-toggle" onclick="toggleSection('ai')">
+            <span class="sec-title">📊 Análisis Semanal — Generado por IA</span>
+            <span class="chevron" id="chev-ai">▼</span>
         </div>
-        <button class="ai-btn" id="ai-regen-btn" onclick="regenerateInsights()">
-            🔄 Regenerar análisis
-        </button>
+        <div class="sec-body" id="sec-ai" style="padding:16px 20px 20px">
+            <div class="ai-sub" id="ai-timestamp" style="margin-bottom:12px">Cargando...</div>
+            <div class="ai-content" id="ai-content">
+                <span class="ai-loading">El análisis se cargará automáticamente...</span>
+            </div>
+            <button class="ai-btn" id="ai-regen-btn" onclick="regenerateInsights()">
+                🔄 Regenerar análisis
+            </button>
+        </div>
     </div>
 
 </div>
