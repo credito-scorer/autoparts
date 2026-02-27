@@ -20,6 +20,7 @@ from agent.responder import (
 )
 from utils.logger import log_request
 from utils.dashboard import render_dashboard
+from connectors.sheets import get_order_log
 from utils.followup import (
     schedule_followup, cancel_followup,
     schedule_long_wait_alert, cancel_long_wait_alert,
@@ -780,12 +781,133 @@ def _webhook_handler():
     return jsonify({"status": "ok"}), 200
 
 
+_ai_cache: dict = {"text": None, "generated_at": None}
+
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     password = os.getenv("DASHBOARD_PASSWORD", "")
     if request.args.get("key") != password:
         return redirect("/?failed=1", 302)
     return make_response(render_dashboard(), 200)
+
+
+@app.route("/dashboard/deliver", methods=["POST"])
+def dashboard_deliver():
+    from datetime import datetime as _dt
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if request.form.get("key") != password:
+        return jsonify({"error": "unauthorized"}), 401
+    row_ts   = request.form.get("row_ts", "")
+    customer = request.form.get("customer", "")
+    if not row_ts or not customer:
+        return jsonify({"error": "missing params"}), 400
+    try:
+        sheet    = get_order_log()
+        all_rows = sheet.get_all_values()
+        for i, row in enumerate(all_rows, 1):
+            if len(row) > 2 and row[0] == row_ts and row[2] == customer:
+                ts_now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                sheet.update_cell(i, 20, ts_now)   # col 20 = index 19
+                return jsonify({"ok": True, "ts": ts_now})
+        return jsonify({"error": "row not found"}), 404
+    except Exception as e:
+        print(f"⚠️ deliver error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dashboard/ai-insights", methods=["GET"])
+def dashboard_ai_insights():
+    from datetime import datetime as _dt, timedelta as _td
+    import json as _json
+    from collections import defaultdict as _dd
+    from anthropic import Anthropic as _Anthropic
+
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if request.args.get("key") != password:
+        return jsonify({"error": "unauthorized"}), 401
+
+    force = request.args.get("force", "0") == "1"
+    now   = _dt.now()
+
+    # Return cached if fresh (< 7 days) and not forced
+    if _ai_cache["text"] and _ai_cache["generated_at"]:
+        gen_dt = _dt.fromisoformat(_ai_cache["generated_at"])
+        age_s  = (now - gen_dt).total_seconds()
+        if not force and age_s < 7 * 86400:
+            return jsonify(_ai_cache)
+        if force and age_s < 3600:
+            return jsonify({"error": "cooldown", "next_in": int(3600 - age_s)})
+
+    # Build summary from last 7 days
+    try:
+        sheet    = get_order_log()
+        all_rows = sheet.get_all_values()
+    except Exception as e:
+        return jsonify({"error": f"sheet error: {e}"}), 500
+
+    week_ago = now - _td(days=7)
+    def _parse(ts):
+        try:
+            return _dt.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    data = [r for r in all_rows
+            if r and r[0].lower() not in ("timestamp", "fecha", "date")
+            and _parse(r[0] if r else "") and _parse(r[0]) >= week_ago]
+
+    def _g(row, i): return row[i] if len(row) > i else ""
+
+    statuses   = _dd(int)
+    top_parts  = _dd(int)
+    top_makes  = _dd(int)
+    no_result  = _dd(int)
+    for r in data:
+        statuses[_g(r, 18)] += 1
+        if _g(r, 3): top_parts[_g(r, 3).strip().lower()] += 1
+        if _g(r, 4): top_makes[_g(r, 4).strip()] += 1
+        if _g(r, 18) == "not_found" and _g(r, 3):
+            no_result[_g(r, 3).strip().lower()] += 1
+
+    summary = _json.dumps({
+        "periodo": "últimos 7 días",
+        "total_transacciones": len(data),
+        "estados": dict(statuses),
+        "piezas_mas_solicitadas": dict(
+            sorted(top_parts.items(), key=lambda x: -x[1])[:10]),
+        "marcas_mas_solicitadas": dict(
+            sorted(top_makes.items(), key=lambda x: -x[1])[:5]),
+        "piezas_sin_resultado": dict(
+            sorted(no_result.items(), key=lambda x: -x[1])[:10]),
+    }, ensure_ascii=False, indent=2)
+
+    prompt = (
+        "Eres un analista de operaciones para Zeli, un servicio de repuestos "
+        "automotrices en Santiago, Panamá. Analiza estos datos de la última semana y entrega:\n"
+        "1. Top 3 hallazgos más importantes\n"
+        "2. Gaps de sourcing críticos (piezas sin cobertura)\n"
+        "3. Problemas en el flujo de conversación si los hay\n"
+        "4. 3 recomendaciones concretas y accionables\n"
+        "5. Una métrica positiva para celebrar\n\n"
+        "Sé directo y específico. Sin preamble. Máximo 200 palabras.\n"
+        f"Datos:\n{summary}"
+    )
+
+    try:
+        client   = _Anthropic()
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = response.content[0].text.strip()
+        _ai_cache["text"]         = text
+        _ai_cache["generated_at"] = now.isoformat()
+        return jsonify(_ai_cache)
+    except Exception as e:
+        print(f"⚠️ AI insights error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/", methods=["GET"])
