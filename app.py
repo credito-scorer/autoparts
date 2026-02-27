@@ -2,8 +2,7 @@ import os
 import time
 import traceback
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
@@ -21,7 +20,11 @@ from agent.responder import (
 )
 from utils.logger import log_request
 from utils.dashboard import render_dashboard
-from utils.followup import schedule_followup, cancel_followup
+from utils.followup import (
+    schedule_followup, cancel_followup,
+    schedule_long_wait_alert, cancel_long_wait_alert,
+)
+from utils import monitor
 from connectors.whatsapp_supplier import (
     handle_supplier_response,
     get_registered_suppliers
@@ -35,8 +38,7 @@ from connectors.local_store import (
 
 load_dotenv()
 
-PANAMA_TZ    = timezone(timedelta(hours=-5))
-STARTUP_TIME = datetime.now(PANAMA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+STARTUP_TIME = monitor.panama_now()
 
 app = Flask(__name__)
 
@@ -47,39 +49,18 @@ escalation_message_map = {}
 live_sessions          = {}
 pending_live_offers    = {}
 
-_error_cooldown: dict = {}
-ALERT_COOLDOWN  = 60  # seconds between alerts for the same error type
-
-
-# ── Error alerting ────────────────────────────────────────────────────────────
-
-def _panama_now() -> str:
-    return datetime.now(PANAMA_TZ).strftime("%Y-%m-%d %H:%M:%S")
-
 
 def _send_error_alert(endpoint: str, exc: Exception) -> None:
-    """Send a WhatsApp alert to the owner on unhandled exception (with cooldown)."""
-    error_type = type(exc).__name__
-    now = time.time()
-    if now - _error_cooldown.get(error_type, 0) < ALERT_COOLDOWN:
-        return
-    _error_cooldown[error_type] = now
-
-    owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
-    if not owner:
-        return
-
+    """Delegate webhook crash alerts to the central monitor module."""
     msg = (
         f"⚠️ *Zeli Bot Error*\n\n"
         f"📍 Endpoint: {endpoint}\n"
-        f"❌ Error: {error_type}: {exc}\n"
-        f"🕐 Hora: {_panama_now()}\n\n"
+        f"❌ Error: {type(exc).__name__}: {exc}\n"
+        f"🕐 Hora: {monitor.panama_now()}\n\n"
         f"Revisa Railway logs para el traceback completo."
     )
-    try:
-        send_whatsapp(owner, msg)
-    except Exception:
-        pass  # Never recurse if the alert itself fails
+    monitor.send_alert(f"webhook_error_{type(exc).__name__}", msg, cooldown=60)
+    monitor.increment_stat("errors")
 
 
 # ── Conversation state machine ─────────────────────────────────────────────────
@@ -110,6 +91,7 @@ def _get_or_create_conversation(number: str) -> dict:
     if conv is None or conv["state"] == ConversationState.COMPLETED:
         conv = _new_conversation()
         conversations[number] = conv
+        monitor.increment_stat("conversations")
     return conv
 
 
@@ -121,18 +103,38 @@ def _close_conversation(number: str, mid_flow: bool) -> None:
 
 
 def _cleanup_loop() -> None:
-    """Background daemon: remove stale conversations every CLEANUP_INTERVAL seconds."""
+    """Background daemon: remove stale conversations, check memory, alert on abandoned."""
     while True:
         time.sleep(CLEANUP_INTERVAL)
         now = time.time()
+
+        # Expire stale conversations — alert if they abandoned at confirmation
         expired = [
-            n for n, c in list(conversations.items())
+            (n, c) for n, c in list(conversations.items())
             if now - c["last_seen"] > CONVERSATION_TTL
         ]
-        for n in expired:
+        for n, conv in expired:
             conversations.pop(n, None)
+            if conv.get("confirming") and conv.get("request_queue"):
+                req = conv["request_queue"][0]
+                try:
+                    monitor.alert_abandoned_confirmation(
+                        n,
+                        req.get("part", "?"), req.get("make", "?"),
+                        req.get("model", "?"), req.get("year", "?"),
+                    )
+                except Exception:
+                    pass
         if expired:
             print(f"🧹 Cleaned up {len(expired)} stale conversation(s)")
+
+        # Memory check (Alert 10)
+        try:
+            mb = monitor.check_memory_mb()
+            if mb > 400:
+                monitor.alert_high_memory(mb)
+        except Exception:
+            pass
 
 
 _cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True)
@@ -316,11 +318,12 @@ def _handle_human_escalation(number: str, message: str) -> None:
     if owner_number:
         msg_sid = send_whatsapp(
             owner_number,
-            f"🔴 *Sesión en vivo iniciada*\n"
-            f"Cliente: {number}\n"
-            f"Mensaje: \"{message}\"\n\n"
-            f"_Responde a este mensaje para hablarle directamente. "
-            f"Escribe *fin* para terminar la sesión y devolver el control al bot._"
+            f"⚠️ *Cliente pidió hablar con una persona*\n"
+            f"👤 Customer: {number}\n"
+            f"💬 Message: \"{message}\"\n"
+            f"🕐 {monitor.panama_now()}\n\n"
+            f"Responde a este mensaje para hablarle directamente. "
+            f"Escribe *fin* para terminar la sesión."
         )
         if msg_sid:
             escalation_message_map[msg_sid] = number
@@ -380,18 +383,26 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
         for fut in as_completed(future_to_req):
             req = future_to_req[fut]
             try:
-                results = fut.result()
+                results = fut.result(timeout=35)   # Alert 3: hard timeout
                 if results:
                     found.append((req, build_options(results, req)))
                 else:
                     not_found.append(req)
+            except FutureTimeoutError:
+                print(f"⏱️ Sourcing timeout: {req.get('part')}")
+                monitor.alert_sourcing_timeout(
+                    req.get("part", "?"), req.get("make", "?"),
+                    req.get("model", "?"), req.get("year", "?"),
+                    number,
+                )
+                not_found.append(req)
             except Exception as e:
                 print(f"⚠️ source_parts error for {req.get('part')}: {e}")
                 not_found.append(req)
 
     cancel_followup(number)
 
-    # Notify about parts not found (if any)
+    # Notify about parts not found (Alert 6) + customer summary
     if not_found:
         vehicle = _vehicle_str(queue)
         send_whatsapp(number, generate_multi_sourcing_summary(found, not_found, vehicle))
@@ -402,10 +413,16 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
                 "parsed":          req,
                 "status":          "not_found",
             })
+            monitor.alert_part_not_found(
+                req.get("part", "?"), req.get("make", "?"),
+                req.get("model", "?"), req.get("year", "?"),
+                number,
+            )
 
-    # Send approval requests for found parts
+    # Send approval requests for found parts; schedule 10-min waiting alert
     for req, options in found:
         send_for_approval(options, req, number, pending_approvals, approval_message_map)
+        schedule_long_wait_alert(number, req, delay=600)
         log_request({
             "customer_number": number,
             "raw_message":     message,
@@ -522,6 +539,11 @@ def _webhook_handler():
 
     if "messages" not in value:
         return jsonify({"status": "ok"}), 200
+
+    # Alert 9 — high volume spike
+    msg_count = monitor.track_message()
+    if msg_count > 20:
+        monitor.alert_high_volume(msg_count)
 
     message = value["messages"][0]
 
@@ -697,6 +719,8 @@ def _webhook_handler():
             del pending_selections[incoming_number]
             # Clear conversation — fresh start for their next request
             conversations.pop(incoming_number, None)
+            cancel_long_wait_alert(incoming_number)
+            monitor.increment_stat("orders_confirmed")
 
         else:
             nums = " o ".join(str(i) for i in range(1, len(options) + 1))
@@ -819,16 +843,24 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
+    stats = monitor.get_stats()
     return {
         "status":               "running",
         "service":              "AutoParts Trading Co.",
         "active_conversations": len(conversations),
         "pending_approvals":    len(pending_approvals),
         "uptime_since":         STARTUP_TIME,
+        "today": {
+            "conversations":    stats.get("conversations", 0),
+            "quotes_sent":      stats.get("quotes_sent", 0),
+            "orders_confirmed": stats.get("orders_confirmed", 0),
+            "parts_not_found":  stats.get("parts_not_found", 0),
+            "errors":           stats.get("errors", 0),
+        },
     }, 200
 
 
-# ── Startup notification ───────────────────────────────────────────────────────
+# ── Startup notification + daily summary daemon ────────────────────────────────
 
 def _send_startup_notification() -> None:
     owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
@@ -846,8 +878,8 @@ def _send_startup_notification() -> None:
         print(f"⚠️ Startup notification failed: {e}")
 
 
-_startup_thread = threading.Thread(target=_send_startup_notification, daemon=True)
-_startup_thread.start()
+threading.Thread(target=_send_startup_notification, daemon=True).start()
+threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

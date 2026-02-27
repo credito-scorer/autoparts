@@ -1,4 +1,6 @@
 import os
+import time
+import threading
 import requests
 from agent.recommender import format_approval_message
 from agent.responder import generate_quote_presentation
@@ -12,7 +14,6 @@ API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
 
 def send_whatsapp(to: str, message: str) -> str | None:
     """Send a WhatsApp message via Meta Cloud API and return the message ID."""
-    # Strip whatsapp: prefix and + so we get a plain international number
     number = to.replace("whatsapp:", "").replace("+", "")
 
     headers = {
@@ -33,6 +34,21 @@ def send_whatsapp(to: str, message: str) -> str | None:
         return msg_id
     except Exception as e:
         print(f"❌ Failed to send WhatsApp to {to}: {e}")
+        # Schedule one retry after 10 seconds in a background thread
+        def _retry():
+            time.sleep(10)
+            try:
+                r = requests.post(API_URL, json=payload, headers=headers)
+                r.raise_for_status()
+                print(f"✅ WhatsApp retry succeeded for {to}")
+            except Exception as retry_err:
+                print(f"❌ WhatsApp retry also failed for {to}: {retry_err}")
+                try:
+                    from utils.monitor import alert_whatsapp_send_failed
+                    alert_whatsapp_send_failed(to, message)
+                except Exception:
+                    pass
+        threading.Thread(target=_retry, daemon=True).start()
         return None
 
 
@@ -119,10 +135,16 @@ def handle_approval(message: str, pending_approvals: dict,
         "final_prices": final_prices
     }
 
-    from utils.followup import cancel_followup
+    from utils.followup import cancel_followup, cancel_long_wait_alert
     cancel_followup(customer_number)
+    cancel_long_wait_alert(customer_number)
     customer_quote = generate_quote_presentation(options, parsed, final_prices)
     send_whatsapp(customer_number, customer_quote)
+    try:
+        from utils.monitor import increment_stat
+        increment_stat("quotes_sent")
+    except Exception:
+        pass
 
     prices_display = " / ".join([f"${p}" for p in final_prices])
     return (

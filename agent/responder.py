@@ -1,5 +1,6 @@
 import os
 from anthropic import Anthropic
+from utils.monitor import alert_claude_error
 
 client = Anthropic()
 
@@ -153,6 +154,7 @@ def generate_response(situation: str, customer_message: str, context: dict = {})
         return response.content[0].text.strip()
     except Exception as e:
         print(f"⚠️ responder error ({situation}): {e}")
+        alert_claude_error(e, f"responder.generate_response[{situation}]")
         return WAIT_ACKNOWLEDGMENT
 
 
@@ -197,6 +199,7 @@ def generate_queue_confirmation(requests: list) -> str:
         return response.content[0].text.strip()
     except Exception as e:
         print(f"⚠️ generate_queue_confirmation error: {e}")
+        alert_claude_error(e, "responder.generate_queue_confirmation")
         if len(requests) == 1:
             req = requests[0]
             return (
@@ -244,6 +247,7 @@ def generate_multi_sourcing_summary(
         return response.content[0].text.strip()
     except Exception as e:
         print(f"⚠️ generate_multi_sourcing_summary error: {e}")
+        alert_claude_error(e, "responder.generate_multi_sourcing_summary")
         msg = ""
         if found_parts:
             msg += f"✅ Cotización en camino para: {found_names}.\n"
@@ -284,6 +288,7 @@ def generate_quote_presentation(options: list, parsed: dict, final_prices: list)
         return response.content[0].text.strip()
     except Exception as e:
         print(f"⚠️ generate_quote_presentation error: {e}")
+        alert_claude_error(e, "responder.generate_quote_presentation")
         # Fallback to structured format
         msg = f"🔩 *{part} — {make} {model} {year}*\n\nOpciones disponibles:\n\n"
         for i, (opt, price) in enumerate(zip(options, final_prices), 1):

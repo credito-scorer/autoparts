@@ -1,7 +1,8 @@
 import threading
 from agent.approval import send_whatsapp
 
-_timers: dict = {}
+_timers:      dict = {}
+_long_timers: dict = {}
 
 FOLLOWUP_MESSAGE = (
     "Aún estamos buscando tu pieza, queremos darte la mejor opción. "
@@ -31,3 +32,36 @@ def cancel_followup(customer_number: str) -> None:
     if t:
         t.cancel()
         print(f"✅ Follow-up cancelled for {customer_number}")
+
+
+def schedule_long_wait_alert(customer_number: str, request_info: dict, delay: int = 600) -> None:
+    """Alert owner if no quote is sent to customer after `delay` seconds (default 10 min)."""
+    cancel_long_wait_alert(customer_number)
+
+    def _alert():
+        _long_timers.pop(customer_number, None)
+        req = request_info or {}
+        try:
+            from utils.monitor import alert_customer_waiting
+            alert_customer_waiting(
+                customer_number,
+                req.get("part", "?"),
+                req.get("make", "?"),
+                req.get("model", "?"),
+                req.get("year", "?"),
+            )
+        except Exception as e:
+            print(f"⚠️ Long-wait alert failed for {customer_number}: {e}")
+
+    t = threading.Timer(delay, _alert)
+    t.daemon = True
+    t.start()
+    _long_timers[customer_number] = t
+    print(f"⏳ Long-wait alert scheduled for {customer_number} in {delay}s")
+
+
+def cancel_long_wait_alert(customer_number: str) -> None:
+    """Cancel a pending long-wait alert timer."""
+    t = _long_timers.pop(customer_number, None)
+    if t:
+        t.cancel()

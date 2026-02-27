@@ -62,6 +62,17 @@ def log_request(data: dict):
         
     except Exception as e:
         print(f"⚠️ Logging error (non-critical): {e}")
+        try:
+            from utils.monitor import alert_sheets_failed
+            parsed = data.get("parsed") or {}
+            summary = (
+                f"{parsed.get('part','')} {parsed.get('make','')} "
+                f"{parsed.get('model','')} {parsed.get('year','')} "
+                f"— {data.get('status','?')} — {data.get('customer_number','?')}"
+            ).strip()
+            alert_sheets_failed(e, summary)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

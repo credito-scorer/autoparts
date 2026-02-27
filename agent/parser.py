@@ -2,6 +2,7 @@ import os
 import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from utils.monitor import alert_claude_error
 
 load_dotenv()
 
@@ -36,17 +37,18 @@ Devuelve el JSON con los campos que puedas extraer (los demás en null).
 Responde con null SOLO si el mensaje es puramente conversacional (saludo, ok, gracias, etc.) sin ninguna mención de piezas o vehículos.
 No incluyas explicaciones, solo el JSON."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=500,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
-    
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
+    except Exception as e:
+        alert_claude_error(e, "parser.parse_request")
+        return None
+
     raw = response.content[0].text.strip()
-    
-    # Clean markdown if Claude wrapped it in ```json
+
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -61,6 +63,9 @@ No incluyas explicaciones, solo el JSON."""
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+
 
 def parse_request_multi(message: str) -> list[dict]:
     """
@@ -109,7 +114,8 @@ No incluyas explicaciones."""
         if isinstance(result, dict) and result.get("part"):
             return [result]
         return []
-    except Exception:
+    except Exception as e:
+        alert_claude_error(e, "parser.parse_request_multi")
         return []
 
 
@@ -152,7 +158,8 @@ def extract_partial(message: str, known: dict) -> dict | None:
         if not raw or raw == "null":
             return None
         return json.loads(raw)
-    except Exception:
+    except Exception as e:
+        alert_claude_error(e, "parser.extract_partial")
         return None
 
 
@@ -205,7 +212,8 @@ def interpret_option_choice(message: str, options: list, final_prices: list) -> 
             return None
         idx = int(raw) - 1
         return idx if 0 <= idx < len(options) else None
-    except Exception:
+    except Exception as e:
+        alert_claude_error(e, "parser.interpret_option_choice")
         return None
 
 
@@ -241,7 +249,8 @@ def parse_correction(message: str, current: dict) -> dict | None:
         if not raw or raw == "null":
             return None
         return json.loads(raw)
-    except Exception:
+    except Exception as e:
+        alert_claude_error(e, "parser.parse_correction")
         return None
 
 
@@ -265,7 +274,8 @@ Responde ÚNICAMENTE con true o false."""
             messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text.strip().lower() == "true"
-    except Exception:
+    except Exception as e:
+        alert_claude_error(e, "parser.detect_needs_human")
         return False
 
 
