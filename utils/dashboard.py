@@ -541,8 +541,11 @@ def render_dashboard() -> str:
 
         /* ── Desktop: 1024px+ ── */
         @media (min-width: 1024px) {
-            body { height: 100vh; overflow: hidden; }
-            .body { overflow: hidden; flex: 1; }
+            /* Page scrolls normally — body is NOT locked to viewport height.
+               .body gets a fixed height so it stays visible and doesn't get
+               squished by the new sections below it. */
+            body { height: auto; overflow: visible; }
+            .body { height: 60vh; min-height: 450px; flex-shrink: 0; overflow: hidden; }
             .main { overflow: auto; }
             .funnel { flex-direction: row; }
             .funnel-stage { text-align: center; }
