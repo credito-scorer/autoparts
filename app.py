@@ -12,7 +12,7 @@ from agent.parser import (
 )
 from agent.sourcing import source_parts
 from agent.recommender import build_options
-from agent.approval import send_for_approval, handle_approval, send_whatsapp
+from agent.approval import send_for_approval, handle_approval, send_whatsapp, send_whatsapp_image
 from agent.responder import (
     generate_response, generate_quote_presentation,
     generate_queue_confirmation, generate_multi_sourcing_summary,
@@ -505,6 +505,105 @@ def process_customer_request(number: str, message: str) -> None:
         _send_queue_missing_prompt(number, message, conv)
 
 
+# ── Image relay ────────────────────────────────────────────────────────────────
+
+def _handle_image_relay(message: dict) -> None:
+    """Relay image messages bidirectionally between customers/stores and the owner."""
+    from utils.media import download_meta_media, upload_meta_media
+
+    incoming_number     = "+" + message["from"]
+    replied_to_sid      = message.get("context", {}).get("id")
+    owner_number        = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
+    owner_number        = "+" + owner_number
+    incoming_normalized = incoming_number.replace("+", "").strip()
+    owner_normalized    = owner_number.replace("+", "").strip()
+
+    image_info = message.get("image", {})
+    media_id   = image_info.get("id")
+    mime_type  = image_info.get("mime_type", "image/jpeg")
+    caption    = image_info.get("caption", "")
+
+    if not media_id:
+        return
+
+    # ── OWNER → forward image to customer or store ──────────────────────────
+    if incoming_normalized == owner_normalized:
+        if replied_to_sid and replied_to_sid in store_message_map:
+            store_number = store_message_map[replied_to_sid]
+            try:
+                img_bytes, _ = download_meta_media(media_id)
+                new_id = upload_meta_media(img_bytes, mime_type)
+                send_whatsapp_image(store_number, new_id, caption)
+                send_whatsapp(owner_number, "✅ Imagen enviada a la tienda.")
+            except Exception as e:
+                print(f"❌ Image relay owner→store failed: {e}")
+                send_whatsapp(owner_number, f"⚠️ No se pudo enviar la imagen a la tienda: {e}")
+            return
+
+        if replied_to_sid and replied_to_sid in escalation_message_map:
+            customer_number = escalation_message_map[replied_to_sid]
+            try:
+                img_bytes, _ = download_meta_media(media_id)
+                new_id = upload_meta_media(img_bytes, mime_type)
+                send_whatsapp_image(customer_number, new_id, caption)
+                escalation_message_map.pop(replied_to_sid, None)
+                send_whatsapp(owner_number, "✅ Imagen enviada al cliente.")
+            except Exception as e:
+                print(f"❌ Image relay owner→customer failed: {e}")
+                send_whatsapp(owner_number, f"⚠️ No se pudo enviar la imagen al cliente: {e}")
+            return
+
+        # Owner image with no recognized reply-to context — ignore
+        return
+
+    # ── STORE → forward image to owner ─────────────────────────────────────
+    if incoming_number in get_store_numbers():
+        label = f"🏪 *Imagen de tienda {incoming_number}*"
+        if caption:
+            label += f"\n_{caption}_"
+        try:
+            img_bytes, _ = download_meta_media(media_id)
+            new_id = upload_meta_media(img_bytes, mime_type)
+            msg_sid = send_whatsapp_image(owner_number, new_id, label)
+            if msg_sid:
+                store_message_map[msg_sid] = incoming_number
+                print(f"📸 Store image {incoming_number} → owner (sid={msg_sid})")
+        except Exception as e:
+            print(f"❌ Image relay store→owner failed: {e}")
+            send_whatsapp(
+                owner_number,
+                f"⚠️ La tienda {incoming_number} envió una imagen pero no pudo retransmitirse: {e}"
+            )
+        return
+
+    # ── CUSTOMER → forward image to owner ──────────────────────────────────
+    label = f"📸 *Imagen de cliente {incoming_number}*"
+    if caption:
+        label += f"\n_{caption}_"
+    try:
+        img_bytes, _ = download_meta_media(media_id)
+        new_id = upload_meta_media(img_bytes, mime_type)
+        msg_sid = send_whatsapp_image(owner_number, new_id, label)
+        if msg_sid:
+            escalation_message_map[msg_sid] = incoming_number
+            print(f"📸 Customer image {incoming_number} → owner (sid={msg_sid})")
+    except Exception as e:
+        print(f"❌ Image relay customer→owner failed: {e}")
+        send_whatsapp(
+            incoming_number,
+            "No pudimos procesar tu imagen. Por favor intenta de nuevo o escríbenos tu solicitud. 🙏"
+        )
+
+    # If caption looks like a part request, also run it through the bot
+    if caption and len(caption.split()) >= 3:
+        thread = threading.Thread(
+            target=process_customer_request,
+            args=(incoming_number, caption)
+        )
+        thread.daemon = True
+        thread.start()
+
+
 # ── Webhook ────────────────────────────────────────────────────────────────────
 
 @app.route("/webhook", methods=["GET"])
@@ -547,6 +646,10 @@ def _webhook_handler():
         monitor.alert_high_volume(msg_count)
 
     message = value["messages"][0]
+
+    if message.get("type") == "image":
+        _handle_image_relay(message)
+        return jsonify({"status": "ok"}), 200
 
     if message.get("type") != "text":
         return jsonify({"status": "ok"}), 200

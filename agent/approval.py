@@ -52,6 +52,34 @@ def send_whatsapp(to: str, message: str) -> str | None:
         return None
 
 
+def send_whatsapp_image(to: str, media_id: str, caption: str = "") -> str | None:
+    """Send a WhatsApp image message via Meta Cloud API and return the message ID."""
+    number = to.replace("whatsapp:", "").replace("+", "")
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('META_ACCESS_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    image_payload: dict = {"id": media_id}
+    if caption:
+        image_payload["caption"] = caption
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number,
+        "type": "image",
+        "image": image_payload,
+    }
+
+    try:
+        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["messages"][0]["id"]
+    except Exception as e:
+        print(f"❌ Failed to send WhatsApp image to {to}: {e}")
+        return None
+
+
 def send_for_approval(options: list, parsed: dict,
                       customer_number: str, pending_approvals: dict,
                       approval_message_map: dict = None):
