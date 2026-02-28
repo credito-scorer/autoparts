@@ -49,6 +49,7 @@ approval_message_map   = {}
 escalation_message_map = {}
 live_sessions          = {}
 pending_live_offers    = {}
+processing_messages    = set()   # dedup guard against Meta webhook retries
 
 
 def _send_error_alert(endpoint: str, exc: Exception) -> None:
@@ -235,6 +236,11 @@ HUMAN_REQUEST = [
     "llámenme", "me llaman", "por favor alguien", "alguien me ayude",
     "alguien que trabaje"
 ]
+
+VAGUE_PARTS = {
+    "motor", "pieza", "parte", "cosa", "repuesto",
+    "eso", "una pieza", "algo", "una parte",
+}
 
 GOODBYE_PHRASES = {
     "gracias", "muchas gracias", "mil gracias", "ok gracias", "okey gracias",
@@ -455,6 +461,19 @@ def process_customer_request(number: str, message: str) -> None:
     # ── Try to parse as part request ───────────────────────────────────────────
     new_requests = parse_request_multi(message)
 
+    # Catch overly broad part names before they enter the queue
+    if new_requests:
+        specific = [r for r in new_requests
+                    if (r.get("part") or "").lower().strip() not in VAGUE_PARTS]
+        if len(specific) < len(new_requests) and not specific and not queue:
+            send_whatsapp(
+                number,
+                "¿Qué parte específica necesitas? Por ejemplo: "
+                "alternador, filtro de aceite, pastillas de freno, bomba de agua."
+            )
+            return
+        new_requests = specific
+
     if new_requests:
         _enqueue_requests(conv, new_requests)
 
@@ -669,6 +688,13 @@ def _webhook_handler():
         monitor.alert_high_volume(msg_count)
 
     message = value["messages"][0]
+
+    msg_id = message.get("id")
+    if msg_id and msg_id in processing_messages:
+        print(f"⚠️ Duplicate webhook {msg_id[:20]}… — skipping")
+        return jsonify({"status": "ok"}), 200
+    if msg_id:
+        processing_messages.add(msg_id)
 
     if message.get("type") == "image":
         threading.Thread(target=_handle_image_relay, args=(message,), daemon=True).start()
@@ -897,11 +923,13 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 7. ALL OTHER MESSAGES → process in background
-    thread = threading.Thread(
-        target=process_customer_request,
-        args=(incoming_number, incoming_message)
-    )
-    thread.daemon = True
+    def _run_and_untrack():
+        try:
+            process_customer_request(incoming_number, incoming_message)
+        finally:
+            processing_messages.discard(msg_id)
+
+    thread = threading.Thread(target=_run_and_untrack, daemon=True)
     thread.start()
 
     return jsonify({"status": "ok"}), 200

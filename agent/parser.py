@@ -40,7 +40,7 @@ MODEL_TO_MAKE: dict = {
     "i20": "Hyundai", "i30": "Hyundai", "Creta": "Hyundai",
     "Palisade": "Hyundai", "Ioniq": "Hyundai", "Kona": "Hyundai",
     "Veloster": "Hyundai", "H100": "Hyundai", "Porter": "Hyundai",
-    "H1": "Hyundai",
+    "H1": "Hyundai", "Grand I10": "Hyundai",
     # Honda
     "CR-V": "Honda", "Civic": "Honda", "Accord": "Honda",
     "Pilot": "Honda", "Passport": "Honda", "Ridgeline": "Honda",
@@ -48,6 +48,8 @@ MODEL_TO_MAKE: dict = {
     "Jazz": "Honda", "City": "Honda", "Freed": "Honda",
     "Mobilio": "Honda", "Element": "Honda", "Insight": "Honda",
     "Stream": "Honda",
+    # Honda aliases (user-typed shorthand)
+    "HRV": "Honda", "CRV": "Honda",
     # Mitsubishi
     "Montero": "Mitsubishi", "Outlander": "Mitsubishi", "ASX": "Mitsubishi",
     "Lancer": "Mitsubishi", "Galant": "Mitsubishi", "Pajero": "Mitsubishi",
@@ -58,6 +60,8 @@ MODEL_TO_MAKE: dict = {
     "D-Max": "Isuzu", "MU-X": "Isuzu", "Trooper": "Isuzu",
     "Rodeo": "Isuzu", "Elf": "Isuzu", "NKR": "Isuzu",
     "NHR": "Isuzu", "NPR": "Isuzu", "Forward": "Isuzu",
+    # Isuzu aliases
+    "DMax": "Isuzu", "MUX": "Isuzu",
     # Kia
     "Sportage": "Kia", "Sorento": "Kia", "Stinger": "Kia",
     "Optima": "Kia", "Rio": "Kia", "Seltos": "Kia",
@@ -73,7 +77,7 @@ MODEL_TO_MAKE: dict = {
     "Legacy": "Subaru", "XV": "Subaru", "Crosstrek": "Subaru",
     "WRX": "Subaru", "BRZ": "Subaru", "Tribeca": "Subaru",
     # RAM
-    "RAM 1500": "RAM", "RAM 2500": "RAM", "RAM 3500": "RAM",
+    "RAM 700": "RAM", "RAM 1500": "RAM", "RAM 2500": "RAM", "RAM 3500": "RAM",
     "ProMaster": "RAM", "Dakota": "RAM",
     # Dodge
     "Durango": "Dodge", "Charger": "Dodge", "Challenger": "Dodge",
@@ -103,23 +107,27 @@ MODEL_TO_MAKE: dict = {
     # Chery
     "Tiggo": "Chery", "Tiggo 3": "Chery", "Tiggo 5": "Chery",
     "Tiggo 7": "Chery", "Tiggo 8": "Chery", "Arrizo": "Chery",
-    "QQ": "Chery", "Grand Tiger": "Chery",
+    "QQ": "Chery", "Grand Tiger": "Chery", "Tigo": "Chery",
     # JAC
     "JAC S3": "JAC", "JAC S4": "JAC", "JAC S5": "JAC",
     "JAC T6": "JAC", "JAC T8": "JAC", "Sei 3": "JAC",
     "Sei 4": "JAC", "Sei 7": "JAC",
+    # JAC aliases (without prefix)
+    "T6": "JAC", "T8": "JAC", "Sei 2": "JAC", "Sei2": "JAC",
     # BYD
     "BYD Song": "BYD", "BYD Tang": "BYD", "BYD Han": "BYD",
     "Atto 3": "BYD", "BYD Yuan": "BYD", "BYD Dolphin": "BYD",
     "BYD Seal": "BYD", "BYD F3": "BYD", "BYD G6": "BYD",
+    # BYD aliases (without prefix / misspellings)
+    "Dolphin": "BYD", "Dolfin": "BYD", "Atto": "BYD", "Seal": "BYD",
     # Great Wall
     "Wingle": "Great Wall", "Poer": "Great Wall", "Jolion": "Great Wall",
     "Haval H6": "Great Wall", "Cannon": "Great Wall",
     # Geely
     "Emgrand": "Geely", "Coolray": "Geely", "Okavango": "Geely",
-    "Azkarra": "Geely", "EC7": "Geely",
+    "Azkarra": "Geely", "EC7": "Geely", "Tugella": "Geely",
     # DFSK
-    "Glory 580": "DFSK", "Seres": "DFSK",
+    "Glory 580": "DFSK", "Glory": "DFSK", "C35": "DFSK", "Seres": "DFSK",
     # Lifan
     "Lifan 620": "Lifan", "Lifan 820": "Lifan", "X50": "Lifan",
     "X60": "Lifan", "X70": "Lifan",
