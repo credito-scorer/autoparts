@@ -507,6 +507,11 @@ def process_customer_request(number: str, message: str) -> None:
 
 # ── Image relay ────────────────────────────────────────────────────────────────
 
+def _normalize_number(n: str) -> str:
+    """Strip all non-digit characters for safe phone number comparison."""
+    return n.replace("whatsapp:", "").replace("+", "").replace(" ", "").replace("-", "").strip()
+
+
 def _handle_image_relay(message: dict) -> None:
     """Relay image messages bidirectionally between customers/stores and the owner."""
     import traceback as _tb
@@ -514,10 +519,10 @@ def _handle_image_relay(message: dict) -> None:
 
     incoming_number     = "+" + message["from"]
     replied_to_sid      = message.get("context", {}).get("id")
-    owner_number        = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
-    owner_number        = "+" + owner_number
-    incoming_normalized = incoming_number.replace("+", "").strip()
-    owner_normalized    = owner_number.replace("+", "").strip()
+    owner_raw           = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    owner_number        = "+" + _normalize_number(owner_raw)
+    incoming_normalized = _normalize_number(incoming_number)
+    owner_normalized    = _normalize_number(owner_number)
 
     image_info = message.get("image", {})
     media_id   = image_info.get("id")
@@ -1108,7 +1113,9 @@ def health():
 def _send_startup_notification() -> None:
     owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
     if not owner:
+        print("⚠️ Startup notification skipped — YOUR_PERSONAL_WHATSAPP not set")
         return
+    print("🚀 Sending startup notification...")
     try:
         send_whatsapp(
             owner,

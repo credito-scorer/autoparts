@@ -73,11 +73,13 @@ def send_whatsapp_image(to: str, media_id: str, caption: str = "") -> str | None
 
     try:
         resp = requests.post(API_URL, json=payload, headers=headers)
+        if not resp.ok:
+            print(f"❌ send_whatsapp_image HTTP {resp.status_code}: {resp.text[:300]}")
         resp.raise_for_status()
         return resp.json()["messages"][0]["id"]
     except Exception as e:
-        print(f"❌ Failed to send WhatsApp image to {to}: {e}")
-        return None
+        print(f"❌ send_whatsapp_image failed: {type(e).__name__}: {e}")
+        raise
 
 
 def send_for_approval(options: list, parsed: dict,
