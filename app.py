@@ -1139,21 +1139,30 @@ def health():
 # ── Startup notification + daily summary daemon ────────────────────────────────
 
 def _send_startup_notification() -> None:
+    # Wait for Railway networking to be fully established before making HTTP calls
+    time.sleep(12)
+
     owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
     if not owner:
         print("⚠️ Startup notification skipped — YOUR_PERSONAL_WHATSAPP not set")
         return
-    print("🚀 Sending startup notification...")
-    try:
-        send_whatsapp(
-            owner,
-            f"✅ *Zeli Bot Online*\n"
-            f"🕐 {STARTUP_TIME}\n"
-            f"🚀 Producción activa — autoparts-production.up.railway.app"
-        )
-        print("📱 Startup notification sent")
-    except Exception as e:
-        print(f"⚠️ Startup notification failed: {e}")
+
+    msg = (
+        f"✅ *Zeli Bot Online*\n"
+        f"🕐 {STARTUP_TIME}\n"
+        f"🚀 Producción activa — autoparts-production.up.railway.app"
+    )
+
+    for attempt in range(1, 4):
+        print(f"🚀 Sending startup notification (attempt {attempt}/3)...")
+        msg_id = send_whatsapp(owner, msg)
+        if msg_id:
+            print(f"📱 Startup notification sent — msg_id={msg_id}")
+            return
+        print(f"⚠️ Startup notification attempt {attempt} returned None — retrying in 15s")
+        time.sleep(15)
+
+    print("❌ Startup notification failed after 3 attempts")
 
 
 threading.Thread(target=_send_startup_notification, daemon=True).start()
