@@ -1108,6 +1108,19 @@ def _webhook_handler():
             thread.start()
 
         else:
+            # If the message references 2+ distinct known models the customer
+            # is likely mixing vehicles — escalate rather than guess a correction.
+            _msg_lower = incoming_message.lower()
+            _msg_words = set(_msg_lower.split())
+            _matched_models = [
+                key for key in MODEL_TO_MAKE
+                if (key.lower() in _msg_lower if " " in key.lower()
+                    else key.lower() in _msg_words)
+            ]
+            if len(_matched_models) >= 2:
+                _handle_human_escalation(incoming_number, incoming_message)
+                return jsonify({"status": "ok"}), 200
+
             representative = conv["request_queue"][0] if conv["request_queue"] else {}
             correction = parse_correction(incoming_message, representative)
 
