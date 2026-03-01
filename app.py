@@ -534,6 +534,11 @@ def process_customer_request(number: str, message: str) -> None:
             return
         new_requests = specific
 
+    # Infer make from model for every parsed item before grouping
+    # (e.g. Claude returns make=null + model=Yaris → resolves to Toyota Yaris)
+    for item in new_requests:
+        resolve_make_model(item, message)
+
     # Raw-message model scan fallback — handles "hilux", "una corolla", etc.
     # parse_request_multi returns [] when there is no part mentioned, so Claude
     # never produces an item for resolve_make_model to operate on.  Scan the
