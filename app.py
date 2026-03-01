@@ -768,7 +768,7 @@ def _webhook_handler():
                 send_whatsapp(owner_number, f"✅ Sesión terminada. Bot activo para {customer_number}.")
                 return jsonify({"status": "ok"}), 200
 
-            send_whatsapp(customer_number, f"💬 *AutoParts Santiago:*\n{incoming_message}")
+            send_whatsapp(customer_number, f"💬 *Zeli:*\n{incoming_message}")
             escalation_message_map.pop(replied_to_sid, None)
             print(f"📤 Forwarded owner reply to {customer_number}: {incoming_message}")
             send_whatsapp(owner_number, "✅ Mensaje enviado al cliente.")
@@ -783,8 +783,7 @@ def _webhook_handler():
             live_sessions[raw_number] = True
             send_whatsapp(
                 raw_number,
-                "Hola, alguien del equipo de AutoParts Santiago se pondrá en "
-                "contacto contigo en un momento. 👋"
+                "Hola, en un momento alguien del equipo de Zeli te contacta. 👋"
             )
             print(f"🔴 Manual live session started for {raw_number}")
             send_whatsapp(owner_number, f"🔴 Sesión en vivo iniciada con {raw_number}.")
