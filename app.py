@@ -8,7 +8,8 @@ from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
 from agent.parser import (
     parse_request_multi, extract_partial, parse_correction,
-    interpret_option_choice, detect_needs_human, MODEL_TO_MAKE
+    interpret_option_choice, detect_needs_human, MODEL_TO_MAKE,
+    resolve_make_model
 )
 from agent.sourcing import source_parts
 from agent.recommender import build_options
@@ -537,6 +538,9 @@ def process_customer_request(number: str, message: str) -> None:
 
         if partial:
             _apply_to_queue(queue, partial)
+            for item in queue:
+                if not item.get("make") and item.get("model"):
+                    resolve_make_model(item, message)
             conv["last_seen"] = time.time()
             for entry in queue:
                 if not _req_complete(entry):
