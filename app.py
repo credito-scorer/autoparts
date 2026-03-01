@@ -138,12 +138,14 @@ def _cleanup_loop() -> None:
         now = time.time()
 
         # Expire stale conversations — alert if they abandoned at confirmation
-        expired = [
-            (n, c) for n, c in list(conversations.items())
-            if now - c["last_seen"] > CONVERSATION_TTL
-        ]
+        with _state_lock:
+            expired = [
+                (n, c) for n, c in list(conversations.items())
+                if now - c["last_seen"] > CONVERSATION_TTL
+            ]
+            for n, _ in expired:
+                conversations.pop(n, None)
         for n, conv in expired:
-            conversations.pop(n, None)
             if conv.get("confirming") and conv.get("request_queue"):
                 req = conv["request_queue"][0]
                 try:
@@ -415,25 +417,29 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
 
     with ThreadPoolExecutor(max_workers=min(count, 4)) as ex:
         future_to_req = {ex.submit(source_parts, req): req for req in queue}
-        for fut in as_completed(future_to_req, timeout=35):  # per-iteration timeout
-            req = future_to_req[fut]
-            try:
-                results = fut.result()
-                if results:
-                    found.append((req, build_options(results, req)))
-                else:
+        try:
+            for fut in as_completed(future_to_req, timeout=35):  # global wait window
+                req = future_to_req[fut]
+                try:
+                    results = fut.result()
+                    if results:
+                        found.append((req, build_options(results, req)))
+                    else:
+                        not_found.append(req)
+                except Exception as e:
+                    print(f"⚠️ source_parts error for {req.get('part')}: {e}")
                     not_found.append(req)
-            except FutureTimeoutError:
-                print(f"⏱️ Sourcing timeout: {req.get('part')}")
-                monitor.alert_sourcing_timeout(
-                    req.get("part", "?"), req.get("make", "?"),
-                    req.get("model", "?"), req.get("year", "?"),
-                    number,
-                )
-                not_found.append(req)
-            except Exception as e:
-                print(f"⚠️ source_parts error for {req.get('part')}: {e}")
-                not_found.append(req)
+        except FutureTimeoutError:
+            # Handle unfinished futures without aborting the full sourcing flow
+            for fut, req in future_to_req.items():
+                if not fut.done():
+                    print(f"⏱️ Sourcing timeout: {req.get('part')}")
+                    monitor.alert_sourcing_timeout(
+                        req.get("part", "?"), req.get("make", "?"),
+                        req.get("model", "?"), req.get("year", "?"),
+                        number,
+                    )
+                    not_found.append(req)
 
     cancel_followup(number)
 
@@ -727,29 +733,9 @@ def _handle_image_relay(message: dict) -> None:
         if msg_sid:
             escalation_message_map[msg_sid] = incoming_number
             print(f"📸 Customer image relayed → owner (sid={msg_sid})")
-        relay_ok = True
     except Exception as e:
         _tb.print_exc()
         print(f"❌ Image relay customer→owner failed: {e}")
-        send_whatsapp(
-            incoming_number,
-            "No pudimos procesar la imagen. Por favor envía una imagen más pequeña "
-            "(máx 5 MB) en formato JPEG o PNG."
-        )
-        return
-
-    # Always give the customer a useful response — never expose internal errors
-    if caption and len(caption.split()) >= 3:
-        threading.Thread(
-            target=process_customer_request,
-            args=(incoming_number, caption),
-            daemon=True
-        ).start()
-    else:
-        send_whatsapp(
-            incoming_number,
-            "📸 Recibí tu imagen. ¿Qué pieza necesitas y para qué vehículo?"
-        )
 
 
 # ── Webhook ────────────────────────────────────────────────────────────────────
@@ -780,12 +766,14 @@ def webhook():
 def _webhook_handler():
     # Verify Meta webhook signature before processing
     app_secret = os.getenv("META_APP_SECRET", "")
-    if app_secret:
-        raw_body = request.get_data()
-        header_sig = request.headers.get("X-Hub-Signature-256", "")
-        if not _verify_meta_signature(raw_body, header_sig, app_secret):
-            print("⚠️ Webhook signature verification failed")
-            return jsonify({"status": "forbidden"}), 403
+    if not app_secret:
+        print("⚠️ META_APP_SECRET missing; rejecting webhook")
+        return jsonify({"status": "forbidden"}), 403
+    raw_body = request.get_data()
+    header_sig = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_meta_signature(raw_body, header_sig, app_secret):
+        print("⚠️ Webhook signature verification failed")
+        return jsonify({"status": "forbidden"}), 403
     data = request.get_json()
 
     try:
@@ -850,11 +838,15 @@ def _webhook_handler():
                 return jsonify({"status": "ok"}), 200
 
         # Reply to a live session / escalation message
-        if replied_to_sid and replied_to_sid in escalation_message_map:
-            customer_number = escalation_message_map[replied_to_sid]
+        customer_number = None
+        if replied_to_sid:
+            with _state_lock:
+                customer_number = escalation_message_map.get(replied_to_sid)
+        if customer_number:
 
             if incoming_message.strip().lower() == "fin":
-                live_sessions.pop(customer_number, None)
+                with _state_lock:
+                    live_sessions.pop(customer_number, None)
                 send_whatsapp(
                     customer_number,
                     "Fue un gusto atenderte. Si necesitas algo más, aquí estamos. 👋\n\n"
@@ -865,7 +857,8 @@ def _webhook_handler():
                 return jsonify({"status": "ok"}), 200
 
             send_whatsapp(customer_number, f"💬 *Zeli:*\n{incoming_message}")
-            escalation_message_map.pop(replied_to_sid, None)
+            with _state_lock:
+                escalation_message_map.pop(replied_to_sid, None)
             print(f"📤 Forwarded owner reply to {customer_number}: {incoming_message}")
             send_whatsapp(owner_number, "✅ Mensaje enviado al cliente.")
             return jsonify({"status": "ok"}), 200
@@ -876,7 +869,8 @@ def _webhook_handler():
             raw_number  = parts[1] if len(parts) > 1 else ""
             if not raw_number.startswith("+"):
                 raw_number = "+" + raw_number
-            live_sessions[raw_number] = True
+            with _state_lock:
+                live_sessions[raw_number] = True
             send_whatsapp(
                 raw_number,
                 "Hola, en un momento alguien del equipo de Zeli te contacta. 👋"
@@ -939,13 +933,17 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer
-    if incoming_number in pending_live_offers:
-        pending_live_offers.pop(incoming_number)
+    with _state_lock:
+        has_pending_live_offer = incoming_number in pending_live_offers
+        if has_pending_live_offer:
+            pending_live_offers.pop(incoming_number, None)
+    if has_pending_live_offer:
         affirmative = incoming_message.strip().lower() in [
             "sí", "si", "yes", "dale", "ok", "okey", "sip", "claro", "bueno", "va"
         ]
         if affirmative:
-            live_sessions[incoming_number] = True
+            with _state_lock:
+                live_sessions[incoming_number] = True
             if owner_number:
                 msg_sid = send_whatsapp(
                     owner_number,
@@ -955,7 +953,8 @@ def _webhook_handler():
                     f"Escribe *fin* para terminar la sesión._"
                 )
                 if msg_sid:
-                    escalation_message_map[msg_sid] = incoming_number
+                    with _state_lock:
+                        escalation_message_map[msg_sid] = incoming_number
             send_whatsapp(incoming_number, "Perfecto, en un momento te contacta alguien del equipo. 👍")
         else:
             send_whatsapp(
@@ -966,14 +965,17 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 5. LIVE SESSION → forward to owner, skip the bot
-    if incoming_number in live_sessions:
+    with _state_lock:
+        in_live_session = incoming_number in live_sessions
+    if in_live_session:
         if owner_number:
             msg_sid = send_whatsapp(
                 owner_number,
                 f"💬 *{incoming_number}:*\n{incoming_message}"
             )
             if msg_sid:
-                escalation_message_map[msg_sid] = incoming_number
+                with _state_lock:
+                    escalation_message_map[msg_sid] = incoming_number
                 print(f"📨 Forwarded live message from {incoming_number} → owner")
         return jsonify({"status": "ok"}), 200
 
@@ -1076,12 +1078,7 @@ def _webhook_handler():
 
     # 7. ALL OTHER MESSAGES → process in background
     def _run_and_untrack():
-        try:
-            process_customer_request(incoming_number, incoming_message)
-        finally:
-            if msg_id:
-                with _state_lock:
-                    processing_messages.pop(msg_id, None)  # TTLCache/dict
+        process_customer_request(incoming_number, incoming_message)
 
     thread = threading.Thread(target=_run_and_untrack, daemon=True)
     thread.start()
