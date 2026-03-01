@@ -891,6 +891,19 @@ def _webhook_handler():
             send_whatsapp(owner_number, f"🔴 Sesión en vivo iniciada con {raw_number}.")
             return jsonify({"status": "ok"}), 200
 
+        # Manual end live session command: "terminar +56912345678"
+        if incoming_message.lower().startswith("terminar "):
+            parts      = incoming_message.strip().split()
+            raw_number = parts[1] if len(parts) > 1 else ""
+            if not raw_number.startswith("+"):
+                raw_number = "+" + raw_number
+            with _state_lock:
+                live_sessions.pop(raw_number, None)
+            send_whatsapp(raw_number, "Listo, cualquier otra cosa me avisas. 👋")
+            print(f"🟢 Manual live session ended for {raw_number}")
+            send_whatsapp(owner_number, "✅ Sesión terminada. El bot retoma el control.")
+            return jsonify({"status": "ok"}), 200
+
         # Normal approval handling
         def _on_cancel_reset(customer_number: str) -> None:
             """Reset customer state on owner cancelar — prevents stuck WAITING."""
