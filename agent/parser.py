@@ -468,8 +468,8 @@ def extract_partial(message: str, known: dict) -> dict | None:
         if not raw or raw == "null":
             return None
         result = json.loads(raw)
-        if isinstance(result, dict) and result.get("make"):
-            result["make"] = _normalize_known_make(result["make"]) or result["make"]
+        if isinstance(result, dict):
+            resolve_make_model(result, message)
         return result
     except Exception as e:
         alert_claude_error(e, "parser.extract_partial")

@@ -461,6 +461,15 @@ def process_customer_request(number: str, message: str) -> None:
         _close_conversation(number, mid_flow=bool(queue))
         return
 
+    # ── WAITING guard — sourcing / approval in progress ────────────────────────
+    if conv["state"] == ConversationState.WAITING:
+        send_whatsapp(
+            number,
+            "Un momento, ya estamos buscando tu pieza. 🔍\n"
+            "Te avisamos en cuanto tengamos la cotización. ⏳"
+        )
+        return
+
     # ── Try to parse as part request ───────────────────────────────────────────
     new_requests = parse_request_multi(message)
 
