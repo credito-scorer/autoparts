@@ -479,6 +479,15 @@ def process_customer_request(number: str, message: str) -> None:
         specific = [r for r in new_requests
                     if (r.get("part") or "").lower().strip() not in VAGUE_PARTS]
         if len(specific) < len(new_requests) and not specific and not queue:
+            # Save any vehicle info from the vague message before rejecting it
+            for r in new_requests:
+                vehicle = {k: v for k, v in r.items()
+                           if k in ("make", "model", "year") and v}
+                if vehicle:
+                    _enqueue_requests(conv, [{"part": None, "make": vehicle.get("make"),
+                                              "model": vehicle.get("model"),
+                                              "year": vehicle.get("year")}])
+                    break
             send_whatsapp(
                 number,
                 "¿Qué parte específica necesitas? Por ejemplo: "
