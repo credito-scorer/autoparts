@@ -311,6 +311,7 @@ client = Anthropic()
 
 def parse_request(message: str) -> dict | None:
     """
+    [DEPRECATED/UNUSED] Kept for backwards compatibility. Use parse_request_multi.
     Takes a raw Spanish WhatsApp message from a mechanic
     and extracts structured part request data.
     Returns a partial dict (some fields may be null) if any part/vehicle info is found.

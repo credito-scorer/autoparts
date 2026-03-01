@@ -126,6 +126,7 @@ def format_approval_message(options: list, parsed: dict, customer_number: str) -
 
 
 def format_customer_quote(options: list, parsed: dict, final_prices: list) -> str:
+    """[DEPRECATED/UNUSED] Kept for backwards compatibility. Use generate_quote_presentation from responder."""
     part = parsed.get("part", "")
     make = parsed.get("make", "")
     model = parsed.get("model", "")

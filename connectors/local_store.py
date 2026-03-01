@@ -1,10 +1,12 @@
 import os
 import time
+import threading
 from agent.approval import send_whatsapp
 from connectors.sheets import get_stores_sheet
 
 # Maps forwarded message SID → store number (for owner reply routing)
 store_message_map = {}
+store_message_map_lock = threading.RLock()
 
 # Simple cache to avoid hitting Sheets on every webhook request
 _store_cache: list = []
@@ -100,7 +102,8 @@ def handle_store_message(store_number: str, message: str) -> None:
         f"🏪 *{store_name}:*\n{message}"
     )
     if msg_sid:
-        store_message_map[msg_sid] = store_number
+        with store_message_map_lock:
+            store_message_map[msg_sid] = store_number
         print(f"📨 Store message forwarded: {store_name} → owner (SID: {msg_sid})")
 
 
@@ -111,7 +114,8 @@ def handle_owner_reply_to_store(store_number: str, message: str,
     store_name = store["name"] if store else store_number
 
     send_whatsapp(store_number, f"💬 *AutoParts Santiago:*\n{message}")
-    store_message_map.pop(replied_sid, None)
+    with store_message_map_lock:
+        store_message_map.pop(replied_sid, None)
     print(f"📤 Owner reply sent to {store_name}: {message}")
 
 

@@ -1,6 +1,8 @@
 import os
 import time
 import traceback
+import hmac
+import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 from enum import Enum
@@ -35,7 +37,8 @@ from connectors.local_store import (
     get_store_numbers,
     handle_store_message,
     handle_owner_reply_to_store,
-    store_message_map
+    store_message_map,
+    store_message_map_lock
 )
 
 load_dotenv()
@@ -44,14 +47,34 @@ STARTUP_TIME = monitor.panama_now()
 
 app = Flask(__name__)
 
+# Thread-safe state
+_state_lock = threading.RLock()
+
 pending_approvals      = {}
 pending_selections     = {}
 approval_message_map   = {}
 escalation_message_map = {}
 live_sessions          = {}
 pending_live_offers    = {}
-processing_messages    = set()   # dedup guard against Meta webhook retries
+# TTL cache: 24h retention, ~10k slots — prevents unbounded growth + idempotency gap
+try:
+    from cachetools import TTLCache
+    processing_messages = TTLCache(maxsize=10000, ttl=86400)
+except ImportError:
+    processing_messages = {}  # fallback: plain dict (same interface as TTLCache)
 _startup_notified      = False   # send deploy notification on first owner message
+
+
+def _verify_meta_signature(raw_body: bytes, header_sig: str | None, app_secret: str) -> bool:
+    """Verify Meta webhook X-Hub-Signature-256 HMAC. Returns True if valid."""
+    if not header_sig or not header_sig.startswith("sha256="):
+        return False
+    if not app_secret:
+        return False
+    expected = "sha256=" + hmac.new(
+        app_secret.encode(), raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, header_sig)
 
 
 def _send_error_alert(endpoint: str, exc: Exception) -> None:
@@ -90,18 +113,20 @@ def _new_conversation() -> dict:
 
 
 def _get_or_create_conversation(number: str) -> dict:
-    conv = conversations.get(number)
-    # Treat expired or completed conversations as fresh starts
-    if conv is None or conv["state"] == ConversationState.COMPLETED:
-        conv = _new_conversation()
-        conversations[number] = conv
-        monitor.increment_stat("conversations")
+    with _state_lock:
+        conv = conversations.get(number)
+        # Treat expired or completed conversations as fresh starts
+        if conv is None or conv["state"] == ConversationState.COMPLETED:
+            conv = _new_conversation()
+            conversations[number] = conv
+            monitor.increment_stat("conversations")
     return conv
 
 
 def _close_conversation(number: str, mid_flow: bool) -> None:
     """End a conversation cleanly, notify customer, and remove from dict."""
-    conversations.pop(number, None)
+    with _state_lock:
+        conversations.pop(number, None)
     cancel_followup(number)
     send_whatsapp(number, GOODBYE_MID_FLOW if mid_flow else GOODBYE_COMPLETED)
 
@@ -318,8 +343,9 @@ def _is_affirmative(message: str) -> bool:
 
 def _handle_human_escalation(number: str, message: str) -> None:
     """Start a live session and notify the owner."""
-    conversations.pop(number, None)
-    live_sessions[number] = True
+    with _state_lock:
+        conversations.pop(number, None)
+        live_sessions[number] = True
     cancel_followup(number)
     print(f"🔴 Live session started for {number}")
 
@@ -389,10 +415,10 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
 
     with ThreadPoolExecutor(max_workers=min(count, 4)) as ex:
         future_to_req = {ex.submit(source_parts, req): req for req in queue}
-        for fut in as_completed(future_to_req):
+        for fut in as_completed(future_to_req, timeout=35):  # per-iteration timeout
             req = future_to_req[fut]
             try:
-                results = fut.result(timeout=35)   # Alert 3: hard timeout
+                results = fut.result()
                 if results:
                     found.append((req, build_options(results, req)))
                 else:
@@ -631,8 +657,9 @@ def _handle_image_relay(message: dict) -> None:
 
     # ── OWNER → forward image to customer or store ──────────────────────────
     if incoming_normalized == owner_normalized:
-        if replied_to_sid and replied_to_sid in store_message_map:
-            store_number = store_message_map[replied_to_sid]
+        with store_message_map_lock:
+            store_number = store_message_map.get(replied_to_sid)
+        if replied_to_sid and store_number:
             print(f"📸 Owner→store relay to {store_number}")
             try:
                 img_bytes, _ = download_meta_media(media_id)
@@ -675,7 +702,8 @@ def _handle_image_relay(message: dict) -> None:
             new_id = upload_meta_media(img_bytes, mime_type)
             msg_sid = send_whatsapp_image(owner_number, new_id, label)
             if msg_sid:
-                store_message_map[msg_sid] = incoming_number
+                with store_message_map_lock:
+                    store_message_map[msg_sid] = incoming_number
                 print(f"📸 Store image relayed → owner (sid={msg_sid})")
         except Exception as e:
             _tb.print_exc()
@@ -691,6 +719,7 @@ def _handle_image_relay(message: dict) -> None:
     if caption:
         label += f"\n_{caption}_"
     print(f"📸 Customer→owner relay from {incoming_number}")
+    relay_ok = False
     try:
         img_bytes, _ = download_meta_media(media_id)
         new_id = upload_meta_media(img_bytes, mime_type)
@@ -698,9 +727,16 @@ def _handle_image_relay(message: dict) -> None:
         if msg_sid:
             escalation_message_map[msg_sid] = incoming_number
             print(f"📸 Customer image relayed → owner (sid={msg_sid})")
+        relay_ok = True
     except Exception as e:
         _tb.print_exc()
         print(f"❌ Image relay customer→owner failed: {e}")
+        send_whatsapp(
+            incoming_number,
+            "No pudimos procesar la imagen. Por favor envía una imagen más pequeña "
+            "(máx 5 MB) en formato JPEG o PNG."
+        )
+        return
 
     # Always give the customer a useful response — never expose internal errors
     if caption and len(caption.split()) >= 3:
@@ -742,6 +778,14 @@ def webhook():
 
 
 def _webhook_handler():
+    # Verify Meta webhook signature before processing
+    app_secret = os.getenv("META_APP_SECRET", "")
+    if app_secret:
+        raw_body = request.get_data()
+        header_sig = request.headers.get("X-Hub-Signature-256", "")
+        if not _verify_meta_signature(raw_body, header_sig, app_secret):
+            print("⚠️ Webhook signature verification failed")
+            return jsonify({"status": "forbidden"}), 403
     data = request.get_json()
 
     try:
@@ -760,11 +804,12 @@ def _webhook_handler():
     message = value["messages"][0]
 
     msg_id = message.get("id")
-    if msg_id and msg_id in processing_messages:
-        print(f"🔁 Duplicate message blocked: {msg_id}")
-        return jsonify({"status": "ok"}), 200
-    if msg_id:
-        processing_messages.add(msg_id)
+    with _state_lock:
+        if msg_id and msg_id in processing_messages:
+            print(f"🔁 Duplicate message blocked: {msg_id}")
+            return jsonify({"status": "ok"}), 200
+        if msg_id:
+            processing_messages[msg_id] = True  # TTLCache or dict
 
     if message.get("type") == "image":
         threading.Thread(target=_handle_image_relay, args=(message,), daemon=True).start()
@@ -796,11 +841,13 @@ def _webhook_handler():
             )
 
         # Reply to a store message → route back to store
-        if replied_to_sid and replied_to_sid in store_message_map:
-            store_number = store_message_map[replied_to_sid]
-            handle_owner_reply_to_store(store_number, incoming_message, replied_to_sid)
-            send_whatsapp(owner_number, "✅ Mensaje enviado a la tienda.")
-            return jsonify({"status": "ok"}), 200
+        if replied_to_sid:
+            with store_message_map_lock:
+                store_number = store_message_map.get(replied_to_sid)
+            if store_number:
+                handle_owner_reply_to_store(store_number, incoming_message, replied_to_sid)
+                send_whatsapp(owner_number, "✅ Mensaje enviado a la tienda.")
+                return jsonify({"status": "ok"}), 200
 
         # Reply to a live session / escalation message
         if replied_to_sid and replied_to_sid in escalation_message_map:
@@ -839,12 +886,23 @@ def _webhook_handler():
             return jsonify({"status": "ok"}), 200
 
         # Normal approval handling
+        def _on_cancel_reset(customer_number: str) -> None:
+            """Reset customer state on owner cancelar — prevents stuck WAITING."""
+            cancel_followup(customer_number)
+            cancel_long_wait_alert(customer_number)
+            with _state_lock:
+                conv = conversations.get(customer_number)
+                if conv:
+                    conv["state"] = ConversationState.ACTIVE
+                    conv["request_queue"] = []
+                    conv["confirming"] = False
         result = handle_approval(
             incoming_message,
             pending_approvals,
             pending_selections,
             approval_message_map,
-            replied_to_sid
+            replied_to_sid,
+            on_cancel_reset=_on_cancel_reset
         )
         send_whatsapp(owner_number, result)
         return jsonify({"status": "ok"}), 200
@@ -854,9 +912,25 @@ def _webhook_handler():
     supplier_numbers     = [s["number"] for s in registered_suppliers]
 
     if incoming_number in supplier_numbers:
-        result = handle_supplier_response(incoming_number, incoming_message)
+        result = handle_supplier_response(
+            incoming_number, incoming_message,
+            replied_to_sid=replied_to_sid if replied_to_sid else None
+        )
         if result:
             print(f"✅ Supplier response: {result['supplier_name']}")
+            # Notify owner — integrate supplier result into flow
+            parsed = result.get("parsed", {})
+            part_str = f"{parsed.get('part', '?')} {parsed.get('make', '?')} " \
+                       f"{parsed.get('model', '?')} {parsed.get('year', '?')}"
+            price = result.get("price") or result.get("total_cost")
+            lead = result.get("lead_time", "?")
+            send_whatsapp(
+                owner_number,
+                f"📩 *Proveedor WhatsApp respondió*\n"
+                f"{result['supplier_name']}: ${price}, {lead}\n"
+                f"Pieza: {part_str}\n"
+                f"Notas: {result.get('notes', '—')}"
+            )
         return jsonify({"status": "ok"}), 200
 
     # 3. LOCAL STORE → forward message to owner, never treat as customer
@@ -1005,7 +1079,9 @@ def _webhook_handler():
         try:
             process_customer_request(incoming_number, incoming_message)
         finally:
-            processing_messages.discard(msg_id)
+            if msg_id:
+                with _state_lock:
+                    processing_messages.pop(msg_id, None)  # TTLCache/dict
 
     thread = threading.Thread(target=_run_and_untrack, daemon=True)
     thread.start()

@@ -52,6 +52,16 @@ def search_supplier_sheet(sheet_id: str, parsed: dict) -> dict | None:
         model = parsed.get("model", "").lower()
         year = str(parsed.get("year", ""))
         
+        def _year_match(want: str, have: str) -> bool:
+            """Tolerant year matching: exact or ±2 year range."""
+            if not want or not have:
+                return True
+            try:
+                wy, hy = int(want.strip()), int(have.strip())
+                return wy == hy or abs(wy - hy) <= 2
+            except ValueError:
+                return want.strip() == have.strip()
+
         for row in records:
             row_part = str(row.get("part", "")).lower()
             row_make = str(row.get("make", "")).lower()
@@ -60,7 +70,8 @@ def search_supplier_sheet(sheet_id: str, parsed: dict) -> dict | None:
             
             if (part in row_part or row_part in part) and \
                (make in row_make or row_make in make) and \
-               (model in row_model or row_model in model):
+               (model in row_model or row_model in model) and \
+               _year_match(year, row_year):
                 
                 price = float(row.get("price", 0))
                 if price > 0:

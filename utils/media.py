@@ -6,6 +6,8 @@ load_dotenv()
 
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 GRAPH_API_BASE  = "https://graph.facebook.com/v17.0"
+ALLOWED_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_MEDIA_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 def download_meta_media(media_id: str) -> tuple[bytes, str]:
@@ -36,10 +38,16 @@ def download_meta_media(media_id: str) -> tuple[bytes, str]:
 
         # Step 2: download the actual bytes
         data_resp = requests.get(url, headers=headers, timeout=30)
-        print(f"📥 Media download status: {data_resp.status_code}, size={len(data_resp.content)} bytes")
+        content = data_resp.content
+        print(f"📥 Media download status: {data_resp.status_code}, size={len(content)} bytes")
         data_resp.raise_for_status()
 
-        return data_resp.content, mime_type
+        if len(content) > MAX_MEDIA_BYTES:
+            raise ValueError(f"Media size {len(content)} exceeds max {MAX_MEDIA_BYTES} bytes")
+        if mime_type not in ALLOWED_MIME:
+            raise ValueError(f"MIME type {mime_type} not allowed")
+
+        return content, mime_type
     except Exception as e:
         print(f"❌ download_meta_media failed: {type(e).__name__}: {e}")
         raise
@@ -50,8 +58,12 @@ def upload_meta_media(image_bytes: bytes, mime_type: str) -> str:
 
     Media IDs are not reusable across recipients, so always re-upload
     before forwarding to a different phone number.
-    Raises on failure.
+    Enforces allowed MIME and max size. Raises on failure.
     """
+    if mime_type not in ALLOWED_MIME:
+        raise ValueError(f"MIME type {mime_type} not allowed")
+    if len(image_bytes) > MAX_MEDIA_BYTES:
+        raise ValueError(f"Media size {len(image_bytes)} exceeds max {MAX_MEDIA_BYTES} bytes")
     try:
         token   = os.getenv("META_ACCESS_TOKEN")
         print(f"📤 Uploading {len(image_bytes)} bytes, mime_type={mime_type}")

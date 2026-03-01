@@ -11,9 +11,12 @@ client = Anthropic()
 
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 30
 
 
-def _send_whatsapp(to: str, message: str) -> None:
+def _send_whatsapp(to: str, message: str) -> str | None:
+    """Send WhatsApp message to supplier. Returns outbound message SID or None."""
     number = to.replace("whatsapp:", "").replace("+", "")
     headers = {
         "Authorization": f"Bearer {os.getenv('META_ACCESS_TOKEN')}",
@@ -26,13 +29,18 @@ def _send_whatsapp(to: str, message: str) -> None:
         "text": {"body": message}
     }
     try:
-        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp = requests.post(
+            API_URL, json=payload, headers=headers,
+            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+        )
         resp.raise_for_status()
+        return resp.json().get("messages", [{}])[0].get("id")
     except Exception as e:
         print(f"❌ Failed to send WhatsApp to {to}: {e}")
+        return None
 
-# In-memory store for pending supplier responses
-# Format: {supplier_number: {"parsed": parsed, "timestamp": time, "response": None}}
+# In-memory store: outbound_msg_sid -> query data. Correlates via reply context.
+# Format: {outbound_msg_sid: {"supplier_number": str, "supplier_name": str, "parsed": dict, ...}}
 pending_supplier_queries = {}
 
 def query_whatsapp_supplier(supplier: dict, parsed: dict) -> dict | None:
@@ -62,35 +70,41 @@ def query_whatsapp_supplier(supplier: dict, parsed: dict) -> dict | None:
         message += f"N° de parte: {part_number}\n"
     message += f"\n¿Tienen disponible? ¿Precio y tiempo de entrega a Santiago?"
     
-    try:
-        _send_whatsapp(supplier["number"], message)
-        
-        # Register as pending
-        pending_supplier_queries[supplier["number"]] = {
+    msg_sid = _send_whatsapp(supplier["number"], message)
+    
+    if msg_sid:
+        pending_supplier_queries[msg_sid] = {
+            "supplier_number": supplier["number"],
             "supplier_name": supplier["name"],
             "parsed": parsed,
             "timestamp": time.time(),
             "response": None,
             "lead_time_default": supplier.get("lead_time", "1-2 días")
         }
-        
-        print(f"✅ Query sent to {supplier['name']}")
-        return {"status": "pending", "supplier": supplier["name"]}
-        
-    except Exception as e:
-        print(f"Error querying {supplier['name']}: {e}")
-        return None
+        print(f"✅ Query sent to {supplier['name']} (sid={msg_sid})")
+    return {"status": "pending", "supplier": supplier["name"]} if msg_sid else None
 
-def handle_supplier_response(supplier_number: str, response_text: str) -> dict | None:
+
+def handle_supplier_response(supplier_number: str, response_text: str,
+                             replied_to_sid: str | None = None) -> dict | None:
     """
     Called when a supplier replies to our WhatsApp query.
+    Correlates by replied_to_sid (outbound message we sent) first; falls back to supplier_number.
     Uses Claude to parse their Spanish response.
     """
-    
-    if supplier_number not in pending_supplier_queries:
+    query = None
+    query_key = None
+    if replied_to_sid and replied_to_sid in pending_supplier_queries:
+        query_key = replied_to_sid
+        query = pending_supplier_queries[query_key]
+    else:
+        for sid, q in list(pending_supplier_queries.items()):
+            if q.get("supplier_number") == supplier_number:
+                query_key = sid
+                query = q
+                break
+    if not query:
         return None
-    
-    query = pending_supplier_queries[supplier_number]
     parsed = query["parsed"]
     
     prompt = f"""Un proveedor de repuestos en Panamá respondió a nuestra consulta.
@@ -128,7 +142,8 @@ Solo responde con el JSON."""
         result = json.loads(raw.strip())
         
         if not result.get("available"):
-            del pending_supplier_queries[supplier_number]
+            if query_key:
+                del pending_supplier_queries[query_key]
             return None
         
         supplier_result = {
@@ -137,11 +152,13 @@ Solo responde con el JSON."""
             "total_cost": result.get("price"),
             "lead_time": result.get("lead_time", query["lead_time_default"]),
             "notes": result.get("notes", ""),
-            "source": "whatsapp_supplier"
+            "source": "whatsapp_supplier",
+            "parsed": query.get("parsed", {})
         }
         
         # Clear from pending
-        del pending_supplier_queries[supplier_number]
+        if query_key:
+            del pending_supplier_queries[query_key]
         
         return supplier_result
         
@@ -179,13 +196,15 @@ if __name__ == "__main__":
     # Test parsing a typical supplier response
     test_response = "Sí tenemos el alternador para Hilux 2008, precio $95, " \
                    "lo tenemos en stock, entrega a Santiago mañana."
-    
-    # Simulate a pending query
-    pending_supplier_queries[os.getenv("TEST_SUPPLIER_NUMBER", "+50712345678")] = {
+    test_number = os.getenv("TEST_SUPPLIER_NUMBER", "+50712345678")
+
+    # Simulate a pending query (keyed by outbound SID)
+    pending_supplier_queries["test_sid_123"] = {
+        "supplier_number": test_number,
         "supplier_name": "Distribuidora Test PTY",
         "parsed": {
             "part": "Alternador",
-            "make": "Toyota", 
+            "make": "Toyota",
             "model": "Hilux",
             "year": "2008"
         },
@@ -193,9 +212,9 @@ if __name__ == "__main__":
         "response": None,
         "lead_time_default": "1-2 días"
     }
-    
+
     print("Testing supplier response parser...")
-    result = handle_supplier_response(os.getenv("TEST_SUPPLIER_NUMBER", "+50712345678"), test_response)
+    result = handle_supplier_response(test_number, test_response, replied_to_sid=None)
     
     if result:
         print(f"✅ Parsed response:")

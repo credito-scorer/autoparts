@@ -1,6 +1,8 @@
 import os
 import time
 import threading
+import uuid
+import random
 import requests
 from agent.recommender import format_approval_message
 from agent.responder import generate_quote_presentation
@@ -10,10 +12,13 @@ load_dotenv()
 
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 30
 
 
 def send_whatsapp(to: str, message: str) -> str | None:
-    """Send a WhatsApp message via Meta Cloud API and return the message ID."""
+    """Send a WhatsApp message via Meta Cloud API and return the message ID.
+    Uses connect/read timeouts; retries with exponential backoff on 429/5xx."""
     number = to.replace("whatsapp:", "").replace("+", "")
 
     headers = {
@@ -27,27 +32,41 @@ def send_whatsapp(to: str, message: str) -> str | None:
         "text": {"body": message}
     }
 
+    def _do_request() -> requests.Response:
+        return requests.post(
+            API_URL, json=payload, headers=headers,
+            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+        )
+
     try:
-        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp = _do_request()
         resp.raise_for_status()
         msg_id = resp.json()["messages"][0]["id"]
         return msg_id
     except Exception as e:
         print(f"❌ Failed to send WhatsApp to {to}: {e}")
-        # Schedule one retry after 10 seconds in a background thread
+        status = getattr(e, "response", None) and getattr(e.response, "status_code", None)
+        # Retry with exponential backoff for 429/5xx
         def _retry():
-            time.sleep(10)
-            try:
-                r = requests.post(API_URL, json=payload, headers=headers)
-                r.raise_for_status()
-                print(f"✅ WhatsApp retry succeeded for {to}")
-            except Exception as retry_err:
-                print(f"❌ WhatsApp retry also failed for {to}: {retry_err}")
+            for attempt in range(3):
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(delay)
                 try:
-                    from utils.monitor import alert_whatsapp_send_failed
-                    alert_whatsapp_send_failed(to, message)
-                except Exception:
-                    pass
+                    r = _do_request()
+                    if r.status_code == 429:
+                        retry_after = int(r.headers.get("Retry-After", 60))
+                        time.sleep(retry_after)
+                        continue
+                    r.raise_for_status()
+                    print(f"✅ WhatsApp retry succeeded for {to}")
+                    return
+                except Exception as retry_err:
+                    print(f"❌ WhatsApp retry attempt {attempt + 1} failed for {to}: {retry_err}")
+            try:
+                from utils.monitor import alert_whatsapp_send_failed
+                alert_whatsapp_send_failed(to, message)
+            except Exception:
+                pass
         threading.Thread(target=_retry, daemon=True).start()
         return None
 
@@ -72,7 +91,10 @@ def send_whatsapp_image(to: str, media_id: str, caption: str = "") -> str | None
     }
 
     try:
-        resp = requests.post(API_URL, json=payload, headers=headers)
+        resp = requests.post(
+            API_URL, json=payload, headers=headers,
+            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+        )
         if not resp.ok:
             print(f"❌ send_whatsapp_image HTTP {resp.status_code}: {resp.text[:300]}")
         resp.raise_for_status()
@@ -85,38 +107,58 @@ def send_whatsapp_image(to: str, media_id: str, caption: str = "") -> str | None
 def send_for_approval(options: list, parsed: dict,
                       customer_number: str, pending_approvals: dict,
                       approval_message_map: dict = None):
+    """Send approval request to owner. Keys by approval_id; approval_message_map by outbound SID."""
     approval_message = format_approval_message(options, parsed, customer_number)
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    if not owner_number:
+        print("⚠️ YOUR_PERSONAL_WHATSAPP not set — skipping approval")
+        return
 
-    pending_approvals[customer_number] = {
+    approval_id = str(uuid.uuid4())
+    pending_approvals[approval_id] = {
+        "approval_id": approval_id,
         "customer_number": customer_number,
         "parsed": parsed,
         "options": options,
         "status": "awaiting_approval"
     }
 
-    if approval_message_map is not None:
-        approval_message_map[approval_message] = customer_number
-
-    send_whatsapp(os.getenv("YOUR_PERSONAL_WHATSAPP"), approval_message)
+    msg_sid = send_whatsapp(owner_number, approval_message)
+    if msg_sid and approval_message_map is not None:
+        approval_message_map[msg_sid] = approval_id  # key by outbound message SID
     print(f"✅ Approval request sent to your WhatsApp")
 
 
 def handle_approval(message: str, pending_approvals: dict,
                     pending_selections: dict,
                     approval_message_map: dict = None,
-                    replied_to: str = None) -> str:
+                    replied_to: str = None,
+                    on_cancel_reset: callable = None) -> str:
     message = message.strip().lower()
 
     if message == "cancelar":
-        if pending_approvals:
-            customer_number = list(pending_approvals.keys())[-1]
-            pending_approvals.pop(customer_number)
-            send_whatsapp(
-                customer_number,
-                "Lo sentimos, no pudimos conseguir esa pieza en este momento. "
-                "Te avisamos cuando tengamos disponibilidad. 🙏"
-            )
-            return "❌ Orden cancelada. Cliente notificado."
+        # Match by reply-to if present
+        approval_id = None
+        if replied_to and approval_message_map:
+            approval_id = approval_message_map.pop(replied_to, None)
+        if not approval_id and pending_approvals:
+            # Fallback: cancel most recently added (last key)
+            approval_id = list(pending_approvals.keys())[-1]
+        if approval_id:
+            pending = pending_approvals.pop(approval_id, None)
+            if pending:
+                customer_number = pending["customer_number"]
+                if on_cancel_reset:
+                    try:
+                        on_cancel_reset(customer_number)
+                    except Exception as e:
+                        print(f"⚠️ on_cancel_reset for {customer_number}: {e}")
+                send_whatsapp(
+                    customer_number,
+                    "Lo sentimos, no pudimos conseguir esa pieza en este momento. "
+                    "Te avisamos cuando tengamos disponibilidad. 🙏"
+                )
+                return "❌ Orden cancelada. Cliente notificado."
         return "No hay órdenes pendientes."
 
     try:
@@ -129,32 +171,30 @@ def handle_approval(message: str, pending_approvals: dict,
             "O escribe *cancelar* para cancelar."
         )
 
-    # Match by reply-to first
-    matched_customer = None
+    # Match by reply-to (outbound message SID) first
+    approval_id = None
     if replied_to and approval_message_map:
-        matched_customer = approval_message_map.get(replied_to)
-        if matched_customer:
-            approval_message_map.pop(replied_to, None)
+        approval_id = approval_message_map.pop(replied_to, None)
 
     # Fall back to matching by number of prices
-    if not matched_customer:
-        for customer_number, pending in pending_approvals.items():
+    if not approval_id:
+        for aid, pending in pending_approvals.items():
             if pending["status"] == "awaiting_approval":
                 if len(final_prices) == len(pending["options"]):
-                    matched_customer = customer_number
+                    approval_id = aid
                     break
 
     # Last resort
-    if not matched_customer:
+    if not approval_id:
         if len(pending_approvals) == 1:
-            matched_customer = list(pending_approvals.keys())[0]
+            approval_id = list(pending_approvals.keys())[0]
         else:
             return (
                 "No encontré una orden pendiente que coincida.\n"
                 f"Órdenes pendientes: {len(pending_approvals)}"
             )
 
-    pending = pending_approvals.pop(matched_customer)
+    pending = pending_approvals.pop(approval_id)
     options = pending["options"]
     parsed = pending["parsed"]
     customer_number = pending["customer_number"]
