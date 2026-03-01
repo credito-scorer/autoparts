@@ -9,9 +9,9 @@ from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
 from agent.parser import (
-    parse_request_multi, extract_partial, parse_correction,
-    interpret_option_choice, detect_needs_human, MODEL_TO_MAKE,
-    resolve_make_model
+    parse_request_multi, extract_partial, extract_vehicle_for_part,
+    parse_correction, interpret_option_choice, detect_needs_human,
+    MODEL_TO_MAKE, resolve_make_model
 )
 from agent.sourcing import source_parts
 from agent.recommender import build_options
@@ -105,10 +105,13 @@ CLEANUP_INTERVAL  = 900     # 15 minutes
 
 def _new_conversation() -> dict:
     return {
-        "state":         ConversationState.ACTIVE,
-        "request_queue": [],
-        "confirming":    False,
-        "last_seen":     time.time(),
+        "state":                 ConversationState.ACTIVE,
+        "request_queue":         [],
+        "confirming":            False,
+        "asking_shared_vehicle": False,
+        "asking_per_item":       False,
+        "current_item_index":    0,
+        "last_seen":             time.time(),
     }
 
 
@@ -476,9 +479,12 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
     if not found:
         conv = conversations.get(number)
         if conv:
-            conv["state"]         = ConversationState.ACTIVE
-            conv["request_queue"] = []
-            conv["confirming"]    = False
+            conv["state"]                 = ConversationState.ACTIVE
+            conv["request_queue"]         = []
+            conv["confirming"]            = False
+            conv["asking_shared_vehicle"] = False
+            conv["asking_per_item"]       = False
+            conv["current_item_index"]    = 0
         send_whatsapp(number, "¿Necesitas algo más? Si tienes otra pieza o vehículo, cuéntame.")
 
 
@@ -656,6 +662,21 @@ def process_customer_request(number: str, message: str) -> None:
         conv["confirming"] = True
         conv["last_seen"]  = time.time()
         send_whatsapp(number, generate_queue_confirmation(conv["request_queue"]))
+    elif (
+        len(conv["request_queue"]) >= 2
+        and not conv.get("asking_shared_vehicle")
+        and not conv.get("asking_per_item")
+        and all(
+            not item.get("make") and not item.get("model") and not item.get("year")
+            for item in conv["request_queue"]
+        )
+    ):
+        # 2+ parts, all missing vehicle — ask whether they share a vehicle
+        conv["asking_shared_vehicle"] = True
+        send_whatsapp(
+            number,
+            "¿Son todas las piezas para el mismo vehículo, o son para carros diferentes? 🚗"
+        )
     else:
         _send_queue_missing_prompt(number, message, conv)
 
@@ -941,9 +962,12 @@ def _webhook_handler():
             with _state_lock:
                 conv = conversations.get(customer_number)
                 if conv:
-                    conv["state"] = ConversationState.ACTIVE
-                    conv["request_queue"] = []
-                    conv["confirming"] = False
+                    conv["state"]                 = ConversationState.ACTIVE
+                    conv["request_queue"]         = []
+                    conv["confirming"]            = False
+                    conv["asking_shared_vehicle"] = False
+                    conv["asking_per_item"]       = False
+                    conv["current_item_index"]    = 0
         result = handle_approval(
             incoming_message,
             pending_approvals,
@@ -1139,6 +1163,81 @@ def _webhook_handler():
                         "model": representative.get("model"),
                         "year":  representative.get("year"),
                     })
+                )
+
+        return jsonify({"status": "ok"}), 200
+
+    # 6.6 SHARED VEHICLE QUESTION → yes = same vehicle, no = per-item
+    conv = conversations.get(incoming_number)
+    if conv and conv.get("asking_shared_vehicle"):
+        if is_goodbye(incoming_message):
+            _close_conversation(incoming_number, mid_flow=True)
+            return jsonify({"status": "ok"}), 200
+        conv["asking_shared_vehicle"] = False
+        if _is_affirmative(incoming_message):
+            # Same vehicle for all — proceed to normal single vehicle prompting
+            _send_queue_missing_prompt(incoming_number, incoming_message, conv)
+        else:
+            # Different vehicles — collect one by one
+            conv["asking_per_item"]    = True
+            conv["current_item_index"] = 0
+            queue = conv["request_queue"]
+            if queue:
+                part = queue[0].get("part") or "la primera pieza"
+                send_whatsapp(
+                    incoming_number,
+                    f"Claro, vamos uno por uno. ¿Para qué vehículo es el *{part}*? "
+                    f"Dime marca, modelo y año."
+                )
+        return jsonify({"status": "ok"}), 200
+
+    # 6.7 PER-ITEM VEHICLE COLLECTION → one vehicle per part
+    conv = conversations.get(incoming_number)
+    if conv and conv.get("asking_per_item"):
+        if is_goodbye(incoming_message):
+            _close_conversation(incoming_number, mid_flow=True)
+            return jsonify({"status": "ok"}), 200
+        queue = conv["request_queue"]
+        idx   = conv.get("current_item_index", 0)
+
+        if idx < len(queue):
+            current_item = queue[idx]
+            part         = current_item.get("part") or "la pieza"
+            partial      = extract_vehicle_for_part(incoming_message, part)
+
+            if partial and any(partial.get(k) for k in ("make", "model", "year")):
+                for k, v in partial.items():
+                    if k in ("make", "model", "year") and v:
+                        current_item[k] = str(v).strip()
+                resolve_make_model(current_item, incoming_message)
+
+                # Advance past any already-complete items
+                next_idx = idx + 1
+                while next_idx < len(queue) and _req_complete(queue[next_idx]):
+                    next_idx += 1
+                conv["current_item_index"] = next_idx
+
+                if next_idx >= len(queue):
+                    # All items visited — wrap up
+                    conv["asking_per_item"]    = False
+                    conv["current_item_index"] = 0
+                    if _queue_all_complete(queue):
+                        conv["confirming"] = True
+                        send_whatsapp(incoming_number, generate_queue_confirmation(queue))
+                    else:
+                        _send_queue_missing_prompt(incoming_number, incoming_message, conv)
+                else:
+                    next_part = queue[next_idx].get("part") or "la siguiente pieza"
+                    send_whatsapp(
+                        incoming_number,
+                        f"¿Y el *{next_part}*? ¿Para qué vehículo? Marca, modelo y año."
+                    )
+            else:
+                # Nothing extracted — re-ask for same item
+                send_whatsapp(
+                    incoming_number,
+                    f"No entendí el vehículo para el *{part}*. "
+                    f"¿Me das marca, modelo y año? Por ejemplo: Toyota Hilux 2019."
                 )
 
         return jsonify({"status": "ok"}), 200

@@ -477,6 +477,43 @@ def extract_partial(message: str, known: dict) -> dict | None:
         return None
 
 
+def extract_vehicle_for_part(message: str, part: str) -> dict | None:
+    """
+    Extract make/model/year from a customer reply that is specifically
+    answering 'what vehicle is [part] for?'. Used in per-item mode.
+    Returns dict with vehicle fields found, or None.
+    """
+    prompt = (
+        f"Estamos preguntando por el vehículo del '{part}'. "
+        f"El cliente respondió: \"{message}\"\n\n"
+        f"Extrae marca, modelo y año del vehículo que menciona. "
+        f"Responde con JSON: {{\"make\": ..., \"model\": ..., \"year\": ...}}. "
+        f"Si un campo no está claro, usa null. "
+        f"Si no menciona ningún dato de vehículo, responde null. Solo el JSON."
+    )
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=80,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        if not raw or raw == "null":
+            return None
+        result = json.loads(raw)
+        if isinstance(result, dict):
+            resolve_make_model(result, message)
+        return result
+    except Exception as e:
+        alert_claude_error(e, "parser.extract_vehicle_for_part")
+        return None
+
+
 _AFFIRMATIONS = {
     "sí", "si", "dale", "ok", "okey", "ese", "ese mismo", "ese está bien",
     "ese me sirve", "ese jale", "ese ta bien", "ese tá bien", "ese pues",
