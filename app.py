@@ -496,7 +496,30 @@ def process_customer_request(number: str, message: str) -> None:
                 break
 
     if new_requests:
-        _enqueue_requests(conv, new_requests)
+        if any(not _req_complete(r) for r in queue):
+            # Incomplete items already in queue — merge, don't blindly append.
+            # This prevents duplicate entries when the customer repeats a part name.
+            queued_parts = {(r.get("part") or "").lower() for r in queue}
+            for new_req in new_requests:
+                new_part = (new_req.get("part") or "").lower()
+                updates = {k: v for k, v in new_req.items()
+                           if v and k in ("part", "make", "model", "year")}
+                # Always merge any new field values into existing incomplete items
+                if updates:
+                    _apply_to_queue(queue, updates)
+                # Only append if this is a part that isn't already in the queue
+                if new_part and new_part not in queued_parts:
+                    item = {k: str(new_req.get(k) or "").strip()
+                            for k in ("part", "make", "model", "year")}
+                    queue.append(item)
+                    queued_parts.add(new_part)
+            for entry in queue:
+                if not _req_complete(entry):
+                    print(f"📝 Updated queue entry: {entry}")
+                    break
+            conv["last_seen"] = time.time()
+        else:
+            _enqueue_requests(conv, new_requests)
 
     elif queue:
         # No new part found — try to extract vehicle/part fields from this message
@@ -506,6 +529,10 @@ def process_customer_request(number: str, message: str) -> None:
         if partial:
             _apply_to_queue(queue, partial)
             conv["last_seen"] = time.time()
+            for entry in queue:
+                if not _req_complete(entry):
+                    print(f"📝 Updated queue entry: {entry}")
+                    break
         else:
             # Conversational message while mid-request
             if is_wait(message):
