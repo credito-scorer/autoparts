@@ -243,13 +243,31 @@ def _fuzzy_match_model(model_text: str) -> str | None:
 
 def resolve_make_model(parsed: dict, raw_message: str) -> dict:
     """
-    Apply three-layer make/model resolution in-place and return parsed dict.
+    Apply make/model resolution in-place and return parsed dict.
+    - Layer 0: raw message word scan (catches model: null from Claude)
     - Layer 1: MODEL_TO_MAKE exact + case-insensitive dict lookup
     - Layer 2: Rapidfuzz fuzzy match on model name or raw message words
-    - Layer 3: Already handled by the enhanced Claude prompt
     """
     make  = parsed.get("make")
     model = parsed.get("model")
+
+    # Layer 0: scan raw message words for known model names.
+    # This catches cases where Claude returned model: null but the message
+    # clearly contains a recognisable vehicle model.
+    # Try longer (multi-word) keys first so "Grand Cherokee" beats "Cherokee".
+    if not model:
+        raw_lower = raw_message.lower()
+        raw_words = set(raw_lower.split())
+        for key in sorted(MODEL_TO_MAKE, key=len, reverse=True):
+            key_lower = key.lower()
+            matched = (key_lower in raw_lower) if " " in key_lower else (key_lower in raw_words)
+            if matched:
+                parsed["model"] = key
+                model = key
+                if not make:
+                    parsed["make"] = MODEL_TO_MAKE[key]
+                    make = parsed["make"]
+                break
 
     # Normalize make if Claude already provided one
     if make:

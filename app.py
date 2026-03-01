@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
 from agent.parser import (
     parse_request_multi, extract_partial, parse_correction,
-    interpret_option_choice, detect_needs_human
+    interpret_option_choice, detect_needs_human, MODEL_TO_MAKE
 )
 from agent.sourcing import source_parts
 from agent.recommender import build_options
@@ -454,6 +454,8 @@ def process_customer_request(number: str, message: str) -> None:
     conv  = _get_or_create_conversation(number)
     queue = conv["request_queue"]
 
+    print(f"💬 State for {number}: state={conv['state'].value} queue={len(queue)}")
+
     # ── Goodbye detection ──────────────────────────────────────────────────────
     if is_goodbye(message):
         _close_conversation(number, mid_flow=bool(queue))
@@ -474,6 +476,24 @@ def process_customer_request(number: str, message: str) -> None:
             )
             return
         new_requests = specific
+
+    # Raw-message model scan fallback — handles "hilux", "una corolla", etc.
+    # parse_request_multi returns [] when there is no part mentioned, so Claude
+    # never produces an item for resolve_make_model to operate on.  Scan the
+    # raw message directly for any known vehicle model and create a part-less
+    # queue entry so the bot asks for the part rather than treating the message
+    # as conversational.
+    if not new_requests and not queue:
+        raw_lower = message.lower().strip()
+        raw_words = set(raw_lower.split())
+        for key in sorted(MODEL_TO_MAKE, key=len, reverse=True):
+            key_lower = key.lower()
+            matched = (key_lower in raw_lower) if " " in key_lower else (key_lower in raw_words)
+            if matched:
+                new_requests = [{"part": None, "make": MODEL_TO_MAKE[key],
+                                 "model": key, "year": None}]
+                print(f"🚗 Model scan fallback: found '{key}' in message")
+                break
 
     if new_requests:
         _enqueue_requests(conv, new_requests)
@@ -692,7 +712,7 @@ def _webhook_handler():
 
     msg_id = message.get("id")
     if msg_id and msg_id in processing_messages:
-        print(f"⚠️ Duplicate webhook {msg_id[:20]}… — skipping")
+        print(f"🔁 Duplicate message blocked: {msg_id}")
         return jsonify({"status": "ok"}), 200
     if msg_id:
         processing_messages.add(msg_id)
