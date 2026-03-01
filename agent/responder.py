@@ -28,10 +28,12 @@ EVITA completamente:
 - 'al toque' — es argentino, nadie lo dice en Panamá
 - 'che', 'boludo', 're-' como prefijo — argentino
 - 'órale', 'chido', 'güey', 'ahorita' como 'ahora mismo' — mexicano
+- 'te late', 'está cañón', 'órale pues' — mexicano/centroamericano, NO se usa en Panamá
 - 'tío', 'tronco', 'macho', 'hostia' — español de España
 - 'pana' como amigo — venezolano/colombiano
-- 'bacano', 'parce' — colombiano
-- Voseo de cualquier tipo
+- 'bacano', 'parce', 'chévere' — colombiano/venezolano
+- Voseo de cualquier tipo: PROHIBIDO 'vos', 'decime', 'mandame', 'avisame', 'contame'
+  En su lugar usa tuteo: 'dime', 'mándame', 'avísame', 'cuéntame'
 - Frases corporativas genéricas como 'estamos para servirle'
 - Exceso de emojis — máximo 1 por mensaje
 - Mensajes de más de 3-4 líneas salvo confirmación de pedido
@@ -113,9 +115,11 @@ FIELD_LABELS = {
 WAIT_ACKNOWLEDGMENT = "Dale, tómate tu tiempo. Aquí estamos cuando estés listo. 👍"
 
 LANGUAGE_GUARD = (
-    "\n\nIMPORTANTE: USA SIEMPRE tuteo (tú). PROHIBIDO voseo. "
-    "Nunca: necesitás, tenés, decís, pasás. "
-    "Prohibido: 'al toque', jerga argentina, mexicana o española. "
+    "\n\nIMPORTANTE: USA SIEMPRE tuteo panameño (tú). PROHIBIDO voseo. "
+    "Nunca: necesitás, tenés, decís, pasás, decime, mandame, avisame, contame. "
+    "Correcto: dime, mándame, avísame, cuéntame. "
+    "Prohibido: 'te late', 'órale', 'chévere', 'chido', jerga argentina, mexicana, colombiana o española. "
+    "Habla como un panameño joven y servicial en una tienda de repuestos — directo, amable, sin florituras. "
     "Solo pregunta por los 4 campos: pieza, marca, modelo, año. "
     "Máximo 3-4 líneas. Natural y directo."
 )
@@ -326,6 +330,9 @@ def generate_quote_presentation(options: list, parsed: dict, final_prices: list)
         f"{options_text}"
         f"Recomienda la mejor opción si hay una clara. "
         f"Al final SIEMPRE incluye la instrucción de que responda con el número de opción. "
+        f"Tono: panameño casual y directo. "
+        f"Ejemplo correcto: '¿Cuál te sirve? Solo dime el número.' "
+        f"PROHIBIDO: '¿Te late?', '¿Qué te parece?', 'órale', 'chévere', voseo. "
         f"Sé conciso. Usa el formato de lista numerada para las opciones."
     )
 
