@@ -50,6 +50,7 @@ escalation_message_map = {}
 live_sessions          = {}
 pending_live_offers    = {}
 processing_messages    = set()   # dedup guard against Meta webhook retries
+_startup_notified      = False   # send deploy notification on first owner message
 
 
 def _send_error_alert(endpoint: str, exc: Exception) -> None:
@@ -715,6 +716,15 @@ def _webhook_handler():
 
     # 1. OWNER → Approval or reply-forwarding flow
     if incoming_normalized == owner_number.replace("+", ""):
+        global _startup_notified
+        if not _startup_notified:
+            _startup_notified = True
+            send_whatsapp(
+                owner_number,
+                f"✅ *Zeli Bot Online*\n"
+                f"🕐 {STARTUP_TIME}\n"
+                f"🚀 Producción activa — autoparts-production.up.railway.app"
+            )
 
         # Reply to a store message → route back to store
         if replied_to_sid and replied_to_sid in store_message_map:
@@ -1138,34 +1148,6 @@ def health():
 
 # ── Startup notification + daily summary daemon ────────────────────────────────
 
-def _send_startup_notification() -> None:
-    # Wait for Railway networking to be fully established before making HTTP calls
-    time.sleep(12)
-
-    owner = os.getenv("YOUR_PERSONAL_WHATSAPP")
-    if not owner:
-        print("⚠️ Startup notification skipped — YOUR_PERSONAL_WHATSAPP not set")
-        return
-
-    msg = (
-        f"✅ *Zeli Bot Online*\n"
-        f"🕐 {STARTUP_TIME}\n"
-        f"🚀 Producción activa — autoparts-production.up.railway.app"
-    )
-
-    for attempt in range(1, 4):
-        print(f"🚀 Sending startup notification (attempt {attempt}/3)...")
-        msg_id = send_whatsapp(owner, msg)
-        if msg_id:
-            print(f"📱 Startup notification sent — msg_id={msg_id}")
-            return
-        print(f"⚠️ Startup notification attempt {attempt} returned None — retrying in 15s")
-        time.sleep(15)
-
-    print("❌ Startup notification failed after 3 attempts")
-
-
-threading.Thread(target=_send_startup_notification, daemon=True).start()
 threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
 
 
