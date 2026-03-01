@@ -503,6 +503,11 @@ def process_customer_request(number: str, message: str) -> None:
         )
         return
 
+    # ── Human request — must be checked BEFORE parse_request_multi ─────────────
+    if is_human_request(message):
+        _handle_human_escalation(number, message)
+        return
+
     # ── Try to parse as part request ───────────────────────────────────────────
     new_requests = parse_request_multi(message)
 
@@ -725,7 +730,6 @@ def _handle_image_relay(message: dict) -> None:
     if caption:
         label += f"\n_{caption}_"
     print(f"📸 Customer→owner relay from {incoming_number}")
-    relay_ok = False
     try:
         img_bytes, _ = download_meta_media(media_id)
         new_id = upload_meta_media(img_bytes, mime_type)
@@ -733,6 +737,13 @@ def _handle_image_relay(message: dict) -> None:
         if msg_sid:
             escalation_message_map[msg_sid] = incoming_number
             print(f"📸 Customer image relayed → owner (sid={msg_sid})")
+        with _state_lock:
+            live_sessions[incoming_number] = True
+        send_whatsapp(incoming_number, "Un momento, ya te contacta alguien del equipo. 👍")
+        send_whatsapp(owner_number,
+            f"💬 Cliente en modo en vivo: {incoming_number}. "
+            f"Sus mensajes te llegan directo. Responde aquí para hablarle.")
+        print(f"🔴 Live session started via image for {incoming_number}")
     except Exception as e:
         _tb.print_exc()
         print(f"❌ Image relay customer→owner failed: {e}")
@@ -859,6 +870,7 @@ def _webhook_handler():
             send_whatsapp(customer_number, f"💬 *Zeli:*\n{incoming_message}")
             with _state_lock:
                 escalation_message_map.pop(replied_to_sid, None)
+                live_sessions[customer_number] = True  # keep routing to owner
             print(f"📤 Forwarded owner reply to {customer_number}: {incoming_message}")
             send_whatsapp(owner_number, "✅ Mensaje enviado al cliente.")
             return jsonify({"status": "ok"}), 200
