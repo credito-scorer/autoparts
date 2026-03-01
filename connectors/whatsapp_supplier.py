@@ -9,7 +9,7 @@ load_dotenv()
 
 client = Anthropic()
 
-PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "1016895944841092")
+PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 API_URL = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
 
 

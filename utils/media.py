@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "1016895944841092")
+PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 GRAPH_API_BASE  = "https://graph.facebook.com/v17.0"
 
 
