@@ -479,6 +479,7 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
             conv["state"]         = ConversationState.ACTIVE
             conv["request_queue"] = []
             conv["confirming"]    = False
+        send_whatsapp(number, "¿Necesitas algo más? Si tienes otra pieza o vehículo, cuéntame.")
 
 
 # ── Main customer request handler ──────────────────────────────────────────────
@@ -550,6 +551,29 @@ def process_customer_request(number: str, message: str) -> None:
                                  "model": key, "year": None}]
                 print(f"🚗 Model scan fallback: found '{key}' in message")
                 break
+
+    # ── Single-vehicle guard: keep only the first vehicle group ───────────────
+    # If the customer mentioned parts for multiple vehicles in one message,
+    # only take the first vehicle group now. They will bring up the next
+    # vehicle naturally after the first is handled.
+    if new_requests and len(new_requests) > 1:
+        def _vehicle_key(r):
+            make  = (r.get("make")  or "").lower().strip()
+            model = (r.get("model") or "").lower().strip()
+            return (make, model) if (make or model) else None
+
+        first_key = None
+        filtered  = []
+        for r in new_requests:
+            k = _vehicle_key(r)
+            if k is None or first_key is None or k == first_key:
+                if first_key is None and k is not None:
+                    first_key = k
+                filtered.append(r)
+        if len(filtered) < len(new_requests):
+            discarded = len(new_requests) - len(filtered)
+            print(f"🚗 Multi-vehicle message: keeping first group, discarding {discarded} item(s)")
+        new_requests = filtered
 
     if new_requests:
         if any(not _req_complete(r) for r in queue):
