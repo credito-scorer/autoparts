@@ -78,7 +78,7 @@ def log_request(data: dict):
 if __name__ == "__main__":
     print("Testing logger...")
     log_request({
-        "customer_number": "whatsapp:+50768001234",
+        "customer_number": os.getenv("TEST_CUSTOMER_NUMBER", "whatsapp:+50768001234"),
         "raw_message": "necesito el alternador del hilux 08",
         "parsed": {
             "part": "Alternador",

@@ -181,7 +181,7 @@ if __name__ == "__main__":
                    "lo tenemos en stock, entrega a Santiago mañana."
     
     # Simulate a pending query
-    pending_supplier_queries["+50712345678"] = {
+    pending_supplier_queries[os.getenv("TEST_SUPPLIER_NUMBER", "+50712345678")] = {
         "supplier_name": "Distribuidora Test PTY",
         "parsed": {
             "part": "Alternador",
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     }
     
     print("Testing supplier response parser...")
-    result = handle_supplier_response("+50712345678", test_response)
+    result = handle_supplier_response(os.getenv("TEST_SUPPLIER_NUMBER", "+50712345678"), test_response)
     
     if result:
         print(f"✅ Parsed response:")

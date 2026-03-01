@@ -792,7 +792,7 @@ def _webhook_handler():
                 owner_number,
                 f"✅ *Zeli Bot Online*\n"
                 f"🕐 {STARTUP_TIME}\n"
-                f"🚀 Producción activa — autoparts-production.up.railway.app"
+                f"🚀 Producción activa — {os.getenv('RAILWAY_PUBLIC_URL', 'autoparts-production.up.railway.app')}"
             )
 
         # Reply to a store message → route back to store
