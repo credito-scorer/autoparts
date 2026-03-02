@@ -290,6 +290,10 @@ FRUSTRATION_PHRASES = [
     "mal bot", "no sirve", "inútil", "no te entiendo", "estás loco",
     "estas loco", "no sé qué", "no se que", "ayuda", "auxilio",
     "qué es esto", "que es esto", "no funciona", "pésimo", "pesimo",
+    "no entiendo", "no entiendo esto", "no entiendo nada", "no comprendo",
+    "que cosa", "qué cosa", "q cosa", "de que hablas", "de qué hablas",
+    "q es esto", "qué es eso", "que es eso", "esto que es", "esto qué es",
+    "no tiene sentido", "no sé", "no se", "perdido", "confundido",
 ]
 
 
@@ -552,8 +556,10 @@ def process_customer_request(number: str, message: str) -> None:
 
     # ── Frustration detection ───────────────────────────────────────────────────
     if is_frustration(message):
-        _handle_human_escalation(number, message, reason="señales de frustración")
-        return
+        if queue or conv.get("dead_end_count", 0) > 0:
+            _handle_human_escalation(number, message, reason="señales de frustración")
+            return
+        # Empty queue, no history — treat as confused new contact, fall through to normal routing
 
     # ── Human request — must be checked BEFORE parse_request_multi ─────────────
     if is_human_request(message):
