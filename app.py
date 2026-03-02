@@ -1124,12 +1124,12 @@ def _webhook_handler():
             queue = list(conv["request_queue"])
             conv["request_queue"] = []
 
-            thread = threading.Thread(
+            threading.Thread(
                 target=_run_multi_sourcing,
-                args=(incoming_number, incoming_message, queue)
-            )
-            thread.daemon = True
-            thread.start()
+                args=(incoming_number, incoming_message, queue),
+                daemon=True,
+            ).start()
+            return jsonify({"status": "ok"}), 200
 
         else:
             # If the message references 2+ distinct known models the customer
