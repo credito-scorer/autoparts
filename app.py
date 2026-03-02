@@ -1008,7 +1008,11 @@ def _webhook_handler():
             if not raw_number.startswith("+"):
                 raw_number = "+" + raw_number
             with _state_lock:
-                live_sessions.pop(raw_number, None)
+                in_session = raw_number in live_sessions
+                if in_session:
+                    live_sessions.pop(raw_number, None)
+            if not in_session:
+                return jsonify({"status": "ok"}), 200
             send_whatsapp(raw_number, "Listo, cualquier otra cosa me avisas. 👋")
             print(f"🟢 Manual live session ended for {raw_number}")
             send_whatsapp(owner_number, "✅ Sesión terminada. El bot retoma el control.")
