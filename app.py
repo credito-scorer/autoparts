@@ -369,7 +369,8 @@ def _is_affirmative(message: str) -> bool:
     # Exact matches
     if msg in {
         "sí", "si", "dale", "ok", "okey", "correcto", "listo",
-        "yes", "sip", "claro", "bueno", "va", "exacto", "eso", "ese",
+        "yes", "sip", "claro", "bueno", "bien", "va", "exacto", "eso", "ese",
+        "ta bien", "está bien", "esta bien",
         "perfecto", "excelente", "genial",
     }:
         return True
@@ -379,7 +380,8 @@ def _is_affirmative(message: str) -> bool:
         return True
     # Affirmation + trailing words: "dale pues", "ok perfecto", "sí correcto"
     return any(msg.startswith(p + " ") for p in (
-        "sí", "si", "dale", "ok", "okey", "claro", "correcto", "sip", "listo"
+        "sí", "si", "dale", "ok", "okey", "claro", "correcto", "sip", "listo",
+        "bien", "ta bien", "está bien", "esta bien"
     ))
 
 
@@ -1197,8 +1199,11 @@ def _webhook_handler():
             monitor.increment_stat("orders_confirmed")
 
         else:
-            nums = " o ".join(str(i) for i in range(1, len(options) + 1))
-            send_whatsapp(incoming_number, f"¿Cuál opción prefieres? Responde con el número ({nums}).")
+            if len(options) == 1:
+                send_whatsapp(incoming_number, "¿Te sirve esta opción? Responde *sí* o *no*.")
+            else:
+                nums = " o ".join(str(i) for i in range(1, len(options) + 1))
+                send_whatsapp(incoming_number, f"¿Cuál opción prefieres? Responde con el número ({nums}).")
 
         return jsonify({"status": "ok"}), 200
 

@@ -517,8 +517,14 @@ def extract_vehicle_for_part(message: str, part: str) -> dict | None:
 _AFFIRMATIONS = {
     "sí", "si", "dale", "ok", "okey", "ese", "ese mismo", "ese está bien",
     "ese me sirve", "ese jale", "ese ta bien", "ese tá bien", "ese pues",
-    "bueno", "perfecto", "listo", "claro", "va", "yes", "sip", "eso",
+    "bueno", "bien", "ta bien", "está bien", "esta bien",
+    "perfecto", "listo", "claro", "va", "yes", "sip", "eso",
     "correcto", "excelente", "genial",
+}
+
+_NEGATIONS = {
+    "no", "nop", "nope", "negativo", "para nada", "no gracias",
+    "no me sirve", "no que va", "qué va", "que va",
 }
 
 
@@ -539,6 +545,10 @@ def interpret_option_choice(message: str, options: list, final_prices: list) -> 
     if len(options) == 1:
         if msg_lower in _AFFIRMATIONS or any(msg_lower.startswith(a + " ") for a in _AFFIRMATIONS):
             return 0
+        # Never ask LLM for single-option yes/no; avoid accidental false positives.
+        if msg_lower in _NEGATIONS or any(msg_lower.startswith(n + " ") for n in _NEGATIONS):
+            return None
+        return None
 
     # Use Haiku to interpret natural language
     options_text = "\n".join(

@@ -324,14 +324,25 @@ def generate_quote_presentation(options: list, parsed: dict, final_prices: list)
             f"  Entrega: {opt['lead_time']}\n\n"
         )
 
+    if len(options) == 1:
+        closing_instruction = (
+            "Al final pregunta SI quiere esa opción. "
+            "Ejemplo correcto: '¿Te sirve esta opción? Responde sí o no.' "
+            "NO pidas número de opción."
+        )
+    else:
+        closing_instruction = (
+            "Al final SIEMPRE incluye la instrucción de que responda con el número de opción. "
+            "Ejemplo correcto: '¿Cuál te sirve? Solo dime el número.' "
+        )
+
     prompt = (
         f"Presenta estas opciones de repuesto al cliente de forma natural y profesional. "
         f"Pieza: {part} para {make} {model} {year}.\n\n"
         f"{options_text}"
         f"Recomienda la mejor opción si hay una clara. "
-        f"Al final SIEMPRE incluye la instrucción de que responda con el número de opción. "
+        f"{closing_instruction} "
         f"Tono: panameño casual y directo. "
-        f"Ejemplo correcto: '¿Cuál te sirve? Solo dime el número.' "
         f"PROHIBIDO: '¿Te late?', '¿Qué te parece?', 'órale', 'chévere', voseo. "
         f"Sé conciso. Usa el formato de lista numerada para las opciones."
     )
@@ -352,7 +363,7 @@ def generate_quote_presentation(options: list, parsed: dict, final_prices: list)
         for i, (opt, price) in enumerate(zip(options, final_prices), 1):
             msg += f"*{i}.* {opt['label']} — ${price} · {opt['lead_time']}\n\n"
         if len(options) == 1:
-            msg += "Responde con *1* para confirmar."
+            msg += "¿Te sirve esta opción? Responde *sí* o *no*."
         else:
             nums = " o ".join(str(i) for i in range(1, len(options) + 1))
             msg += f"Responde con el número de opción ({nums})."
