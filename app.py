@@ -111,6 +111,9 @@ def _new_conversation() -> dict:
         "asking_shared_vehicle": False,
         "asking_per_item":       False,
         "current_item_index":    0,
+        "dead_end_count":        0,
+        "same_field_count":      0,
+        "last_missing_field":    None,
         "last_seen":             time.time(),
     }
 
@@ -282,6 +285,13 @@ GOODBYE_PHRASES = {
     "ya no necesito", "no gracias", "dejalo", "déjalo", "olvídalo", "olvidalo",
 }
 
+FRUSTRATION_PHRASES = [
+    "no me entiendes", "no entiende", "esto no funciona", "qué clase de bot",
+    "mal bot", "no sirve", "inútil", "no te entiendo", "estás loco",
+    "estas loco", "no sé qué", "no se que", "ayuda", "auxilio",
+    "qué es esto", "que es esto", "no funciona", "pésimo", "pesimo",
+]
+
 
 def is_greeting(message: str) -> bool:
     msg = message.lower().strip()
@@ -320,6 +330,11 @@ def is_goodbye(message: str) -> bool:
     return msg in GOODBYE_PHRASES
 
 
+def is_frustration(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(phrase in msg for phrase in FRUSTRATION_PHRASES)
+
+
 def _is_affirmative(message: str) -> bool:
     """
     Detect yes/confirmation in a WhatsApp message.
@@ -346,21 +361,25 @@ def _is_affirmative(message: str) -> bool:
 
 # ── Escalation helper ──────────────────────────────────────────────────────────
 
-def _handle_human_escalation(number: str, message: str) -> None:
+def _handle_human_escalation(
+    number: str, message: str,
+    reason: str = "cliente solicitó hablar con una persona"
+) -> None:
     """Start a live session and notify the owner."""
     with _state_lock:
         conversations.pop(number, None)
         live_sessions[number] = True
     cancel_followup(number)
-    print(f"🔴 Live session started for {number}")
+    print(f"🔴 Live session started for {number} — {reason}")
 
     owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
     if owner_number:
         msg_sid = send_whatsapp(
             owner_number,
-            f"⚠️ *Cliente pidió hablar con una persona*\n"
-            f"👤 Customer: {number}\n"
-            f"💬 Message: \"{message}\"\n"
+            f"⚠️ *Escalación automática*\n"
+            f"Cliente: {number}\n"
+            f"Motivo: {reason}\n"
+            f"Último mensaje: \"{message}\"\n"
             f"🕐 {monitor.panama_now()}\n\n"
             f"Responde a este mensaje para hablarle directamente. "
             f"Escribe *fin* para terminar la sesión."
@@ -381,6 +400,20 @@ def _send_queue_missing_prompt(number: str, message: str, conv: dict) -> None:
     missing = _missing_from_queue(queue)
     if not missing:
         return
+
+    # Track how many times we've asked for the same field; escalate after 3
+    next_field = missing[0]
+    if next_field == conv.get("last_missing_field"):
+        conv["same_field_count"] = conv.get("same_field_count", 0) + 1
+    else:
+        conv["same_field_count"]   = 0
+        conv["last_missing_field"] = next_field
+    if conv["same_field_count"] >= 3:
+        _handle_human_escalation(
+            number, message, reason="mismo campo repetido 3 veces"
+        )
+        return
+
     is_first = (
         len(queue) == 1
         and not known.get("make")
@@ -485,6 +518,9 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
             conv["asking_shared_vehicle"] = False
             conv["asking_per_item"]       = False
             conv["current_item_index"]    = 0
+            conv["dead_end_count"]        = 0
+            conv["same_field_count"]      = 0
+            conv["last_missing_field"]    = None
         send_whatsapp(number, "¿Necesitas algo más? Si tienes otra pieza o vehículo, cuéntame.")
 
 
@@ -508,6 +544,11 @@ def process_customer_request(number: str, message: str) -> None:
             "Un momento, ya estamos buscando tu pieza. 🔍\n"
             "Te avisamos en cuanto tengamos la cotización. ⏳"
         )
+        return
+
+    # ── Frustration detection ───────────────────────────────────────────────────
+    if is_frustration(message):
+        _handle_human_escalation(number, message, reason="señales de frustración")
         return
 
     # ── Human request — must be checked BEFORE parse_request_multi ─────────────
@@ -608,9 +649,15 @@ def process_customer_request(number: str, message: str) -> None:
                 if not _req_complete(entry):
                     print(f"📝 Updated queue entry: {entry}")
                     break
-            conv["last_seen"] = time.time()
+            conv["last_seen"]          = time.time()
+            conv["dead_end_count"]     = 0
+            conv["same_field_count"]   = 0
+            conv["last_missing_field"] = None
         else:
             _enqueue_requests(conv, new_requests)
+            conv["dead_end_count"]     = 0
+            conv["same_field_count"]   = 0
+            conv["last_missing_field"] = None
 
     elif queue:
         # No new part found — try to extract vehicle/part fields from this message
@@ -622,7 +669,10 @@ def process_customer_request(number: str, message: str) -> None:
             for item in queue:
                 if not item.get("make") and item.get("model"):
                     resolve_make_model(item, message)
-            conv["last_seen"] = time.time()
+            conv["last_seen"]          = time.time()
+            conv["dead_end_count"]     = 0
+            conv["same_field_count"]   = 0
+            conv["last_missing_field"] = None
             for entry in queue:
                 if not _req_complete(entry):
                     print(f"📝 Updated queue entry: {entry}")
@@ -654,7 +704,13 @@ def process_customer_request(number: str, message: str) -> None:
             pending_live_offers[number] = True
             send_whatsapp(number, generate_response("human_request", message))
         else:
-            send_whatsapp(number, generate_response("unknown", message))
+            conv["dead_end_count"] = conv.get("dead_end_count", 0) + 1
+            if conv["dead_end_count"] >= 2:
+                _handle_human_escalation(
+                    number, message, reason="mensajes sin respuesta útil"
+                )
+            else:
+                send_whatsapp(number, generate_response("unknown", message))
         return
 
     # ── Check if all queue items are complete ──────────────────────────────────
@@ -968,6 +1024,9 @@ def _webhook_handler():
                     conv["asking_shared_vehicle"] = False
                     conv["asking_per_item"]       = False
                     conv["current_item_index"]    = 0
+                    conv["dead_end_count"]        = 0
+                    conv["same_field_count"]      = 0
+                    conv["last_missing_field"]    = None
         result = handle_approval(
             incoming_message,
             pending_approvals,
