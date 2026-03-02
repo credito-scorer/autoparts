@@ -62,7 +62,7 @@ try:
     processing_messages = TTLCache(maxsize=10000, ttl=86400)
 except ImportError:
     processing_messages = {}  # fallback: plain dict (same interface as TTLCache)
-_startup_notified      = False   # send deploy notification on first owner message
+_startup_notified      = False   # send deploy notification once on boot
 
 
 def _verify_meta_signature(raw_body: bytes, header_sig: str | None, app_secret: str) -> bool:
@@ -88,6 +88,26 @@ def _send_error_alert(endpoint: str, exc: Exception) -> None:
     )
     monitor.send_alert(f"webhook_error_{type(exc).__name__}", msg, cooldown=60)
     monitor.increment_stat("errors")
+
+
+def _send_startup_notification_once() -> None:
+    """Send deploy/online notification immediately after boot."""
+    global _startup_notified
+    with _state_lock:
+        if _startup_notified:
+            return
+        _startup_notified = True
+
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    if not owner_number:
+        return
+
+    send_whatsapp(
+        owner_number,
+        f"✅ *Zeli Bot Online*\n"
+        f"🕐 {STARTUP_TIME}\n"
+        f"🚀 Producción activa — {os.getenv('RAILWAY_PUBLIC_URL', 'autoparts-production.up.railway.app')}"
+    )
 
 
 # ── Conversation state machine ─────────────────────────────────────────────────
@@ -711,8 +731,9 @@ def process_customer_request(number: str, message: str) -> None:
         elif is_vague_intent(message):
             send_whatsapp(number, generate_response("vague_intent", message))
         elif detect_needs_human(message):
-            pending_live_offers[number] = True
-            send_whatsapp(number, generate_response("human_request", message))
+            _handle_human_escalation(
+                number, message, reason="señales de frustración/confusión"
+            )
         else:
             conv["dead_end_count"] = conv.get("dead_end_count", 0) + 1
             if conv["dead_end_count"] >= 2:
@@ -854,12 +875,17 @@ def _handle_image_relay(message: dict) -> None:
             escalation_message_map[msg_sid] = incoming_number
             print(f"📸 Customer image relayed → owner (sid={msg_sid})")
         with _state_lock:
+            was_live = incoming_number in live_sessions
             live_sessions[incoming_number] = True
-        send_whatsapp(incoming_number, "Un momento, ya te contacta alguien del equipo. 👍")
-        send_whatsapp(owner_number,
-            f"💬 Cliente en modo en vivo: {incoming_number}. "
-            f"Sus mensajes te llegan directo. Responde aquí para hablarle.")
-        print(f"🔴 Live session started via image for {incoming_number}")
+        # Only announce/start live mode once; avoid duplicate owner alerts on later images.
+        if not was_live:
+            send_whatsapp(incoming_number, "Un momento, ya te contacta alguien del equipo. 👍")
+            send_whatsapp(
+                owner_number,
+                f"💬 Cliente en modo en vivo: {incoming_number}. "
+                f"Sus mensajes te llegan directo. Responde aquí para hablarle."
+            )
+            print(f"🔴 Live session started via image for {incoming_number}")
     except Exception as e:
         _tb.print_exc()
         print(f"❌ Image relay customer→owner failed: {e}")
@@ -945,16 +971,6 @@ def _webhook_handler():
 
     # 1. OWNER → Approval or reply-forwarding flow
     if incoming_normalized == owner_number.replace("+", ""):
-        global _startup_notified
-        if not _startup_notified:
-            _startup_notified = True
-            send_whatsapp(
-                owner_number,
-                f"✅ *Zeli Bot Online*\n"
-                f"🕐 {STARTUP_TIME}\n"
-                f"🚀 Producción activa — {os.getenv('RAILWAY_PUBLIC_URL', 'autoparts-production.up.railway.app')}"
-            )
-
         # Reply to a store message → route back to store
         if replied_to_sid:
             with store_message_map_lock:
@@ -1528,6 +1544,7 @@ def health():
 
 # ── Startup notification + daily summary daemon ────────────────────────────────
 
+threading.Thread(target=_send_startup_notification_once, daemon=True).start()
 threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
 
 
