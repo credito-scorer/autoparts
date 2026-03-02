@@ -366,13 +366,16 @@ def _handle_human_escalation(
     reason: str = "cliente solicitó hablar con una persona"
 ) -> None:
     """Start a live session and notify the owner."""
+    print(f"🔴 _handle_human_escalation called for {number}")
     with _state_lock:
         conversations.pop(number, None)
         live_sessions[number] = True
     cancel_followup(number)
-    print(f"🔴 Live session started for {number} — {reason}")
+    print(f"🔴 Setting live_sessions[{number}] = True")
+    print(f"🔴 live_sessions after set: {list(live_sessions.keys())}")
 
     owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP")
+    print(f"🔴 Owner number: {owner_number}")
     if owner_number:
         msg_sid = send_whatsapp(
             owner_number,
@@ -384,11 +387,12 @@ def _handle_human_escalation(
             f"Responde a este mensaje para hablarle directamente. "
             f"Escribe *fin* para terminar la sesión."
         )
+        print(f"🔴 msg_sid returned: {msg_sid}")
         if msg_sid:
             escalation_message_map[msg_sid] = number
             print(f"📋 Live session mapped: {msg_sid} → {number}")
 
-    send_whatsapp(number, generate_response("human_request", message))
+    send_whatsapp(number, "Un momento, ya te contacta alguien del equipo. 👍")
 
 
 # ── Missing-fields prompt ──────────────────────────────────────────────────────
