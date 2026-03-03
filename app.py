@@ -966,6 +966,7 @@ def _webhook_handler():
     incoming_message = message.get("text", {}).get("body", "").strip()
     replied_to_sid   = message.get("context", {}).get("id")
 
+    print(f"🔍 WEBHOOK ENTRY: from='{incoming_number}' body='{incoming_message}'")
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
     owner_number        = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
@@ -1103,7 +1104,7 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 3.5 BETA DISCOVERY MODE → handle before any regular customer/session routing
-    print(f"🔍 Beta check: '{incoming_number}' | whitelist: {get_beta_whitelist()}")
+    print(f"🔍 BETA CHECK: '{incoming_number}' | whitelist: {get_beta_whitelist()}")
     if is_beta_user(incoming_number):
         print(f"🧪 Beta route active for {incoming_number}")
         thread = threading.Thread(
