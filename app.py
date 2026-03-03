@@ -40,6 +40,7 @@ from connectors.local_store import (
     store_message_map,
     store_message_map_lock
 )
+from beta_discovery import is_beta_user, handle_beta_message
 
 load_dotenv()
 
@@ -1099,6 +1100,18 @@ def _webhook_handler():
     # 3. LOCAL STORE → forward message to owner, never treat as customer
     if incoming_number in get_store_numbers():
         handle_store_message(incoming_number, incoming_message)
+        return jsonify({"status": "ok"}), 200
+
+    # 3.5 BETA DISCOVERY MODE → handle before any regular customer/session routing
+    print(f"🔍 Beta check: '{incoming_number}' | whitelist: {get_beta_whitelist()}")
+    if is_beta_user(incoming_number):
+        print(f"🧪 Beta route active for {incoming_number}")
+        thread = threading.Thread(
+            target=handle_beta_message,
+            args=(incoming_number, incoming_message),
+            daemon=True,
+        )
+        thread.start()
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer
