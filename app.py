@@ -40,7 +40,7 @@ from connectors.local_store import (
     store_message_map,
     store_message_map_lock
 )
-from beta_discovery import is_beta_user, handle_beta_message
+from beta_discovery import is_beta_user, handle_beta_message, get_beta_whitelist
 
 load_dotenv()
 
