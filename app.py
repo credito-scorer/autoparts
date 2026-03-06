@@ -1219,6 +1219,7 @@ def _webhook_handler():
         send_whatsapp(owner_number, result)
         return jsonify({"status": "ok"}), 200
 
+    print(f"🧪 SELLER CHECK: incoming={incoming_number} is_seller={is_seller(incoming_number)}")
     # 1.5 SELLER → seller inbound message flow
     if is_seller(incoming_number):
         seller_name = get_seller_name(incoming_number)
