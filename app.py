@@ -968,6 +968,26 @@ def _webhook_handler():
     owner_number        = "+" + owner_number
     incoming_normalized = incoming_number.replace("+", "").strip()
 
+    # 1.5 SELLER → must be checked before the owner block so that a whitelisted
+    # seller whose number happens to match owner_number is not swallowed by the
+    # owner flow and silently returned before the seller check is reached.
+    if is_seller(incoming_number):
+        seller_name = get_seller_name(incoming_number)
+        if incoming_number in seller_sessions:
+            msg_sid = send_whatsapp(
+                owner_number,
+                f"📦 *{seller_name}:* {incoming_message}"
+            )
+            if msg_sid:
+                seller_message_map[msg_sid] = incoming_number
+        else:
+            send_whatsapp(
+                owner_number,
+                f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
+                f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
+            )
+        return jsonify({"status": "ok"}), 200
+
     # 1. OWNER → Approval or reply-forwarding flow
     if incoming_normalized == owner_number.replace("+", ""):
         # Reply to a store message → route back to store
@@ -1217,25 +1237,6 @@ def _webhook_handler():
             on_cancel_reset=_on_cancel_reset
         )
         send_whatsapp(owner_number, result)
-        return jsonify({"status": "ok"}), 200
-
-    print(f"🧪 SELLER CHECK: incoming={incoming_number} is_seller={is_seller(incoming_number)}")
-    # 1.5 SELLER → seller inbound message flow
-    if is_seller(incoming_number):
-        seller_name = get_seller_name(incoming_number)
-        if incoming_number in seller_sessions:
-            msg_sid = send_whatsapp(
-                owner_number,
-                f"📦 *{seller_name}:* {incoming_message}"
-            )
-            if msg_sid:
-                seller_message_map[msg_sid] = incoming_number
-        else:
-            send_whatsapp(
-                owner_number,
-                f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
-                f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
-            )
         return jsonify({"status": "ok"}), 200
 
     # 2. SUPPLIER → Supplier response flow
