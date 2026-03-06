@@ -39,6 +39,7 @@ from connectors.local_store import (
     store_message_map_lock
 )
 from beta_discovery import is_beta_user, handle_beta_message, get_beta_whitelist
+from connectors.sellers import is_seller, get_seller_name, get_seller_number_by_name
 
 load_dotenv()
 
@@ -58,6 +59,12 @@ owner_briefing_context = {}   # customer_number → {parsed, raw_message}
 pending_quotes         = {}   # customer_number → {description, price, lead_time, parsed, raw_message}
 live_sessions          = {}
 pending_live_offers    = {}
+seller_sessions        = {}
+# Maps seller_number → owner session context
+# { "+507...": { "name": "Luis", "started_at": "..." } }
+seller_message_map     = {}
+# Maps message SID → seller_number
+# So owner replies route to the right seller
 # TTL cache: 24h retention, ~10k slots — prevents unbounded growth + idempotency gap
 try:
     from cachetools import TTLCache
@@ -972,6 +979,70 @@ def _webhook_handler():
                 send_whatsapp(owner_number, "✅ Mensaje enviado a la tienda.")
                 return jsonify({"status": "ok"}), 200
 
+        # Reply to a seller message → forward reply to seller
+        if replied_to_sid and replied_to_sid in seller_message_map:
+            seller_number = seller_message_map.pop(replied_to_sid, None)
+            if seller_number:
+                msg_sid = send_whatsapp(seller_number, incoming_message)
+                if msg_sid:
+                    seller_message_map[msg_sid] = seller_number
+            return jsonify({"status": "ok"}), 200
+
+        # SELLER command — open a seller session and send inquiry
+        if incoming_message.upper().startswith("SELLER,"):
+            parts = incoming_message.split(",", 2)
+            if len(parts) < 3:
+                send_whatsapp(owner_number, "⚠️ Formato: SELLER, nombre, mensaje")
+                return jsonify({"status": "ok"}), 200
+            name_or_number = parts[1].strip()
+            inquiry_text   = parts[2].strip()
+            seller_number  = get_seller_number_by_name(name_or_number)
+            name           = name_or_number
+            if seller_number is None:
+                seller_number = "+" + _normalize_number(name_or_number)
+            seller_sessions[seller_number] = {
+                "name": name, "started_at": monitor.panama_now()
+            }
+            msg_sid = send_whatsapp(
+                seller_number,
+                f"Hola {name}, ¿tienes {inquiry_text}? — Ronel"
+            )
+            if msg_sid:
+                seller_message_map[msg_sid] = seller_number
+            send_whatsapp(
+                owner_number,
+                f"✅ Mensaje enviado a {name}. Responde a este mensaje para continuar la conversación."
+            )
+            log_event("seller_session_opened", {
+                "customer_number": owner_number,
+                "raw_message":     incoming_message,
+                "notes":           f"Seller: {name} — {inquiry_text}",
+            })
+            return jsonify({"status": "ok"}), 200
+
+        # END command — close an active seller session
+        if incoming_message.upper().startswith("END,"):
+            parts = incoming_message.split(",", 1)
+            if len(parts) < 2:
+                send_whatsapp(owner_number, "⚠️ Formato: END, nombre")
+                return jsonify({"status": "ok"}), 200
+            name_or_number = parts[1].strip()
+            seller_number  = get_seller_number_by_name(name_or_number)
+            name           = name_or_number
+            if seller_number is None:
+                seller_number = "+" + _normalize_number(name_or_number)
+            if seller_number in seller_sessions:
+                seller_sessions.pop(seller_number, None)
+                send_whatsapp(owner_number, f"✅ Sesión con {name} cerrada.")
+                log_event("seller_session_closed", {
+                    "customer_number": owner_number,
+                    "raw_message":     incoming_message,
+                    "notes":           f"Seller: {name}",
+                })
+            else:
+                send_whatsapp(owner_number, f"No hay sesión activa con {name}.")
+            return jsonify({"status": "ok"}), 200
+
         # Reply to an owner briefing → QUOTE / NOFOUND / NOTE
         if replied_to_sid and replied_to_sid in owner_briefing_map:
             briefing_customer = owner_briefing_map.get(replied_to_sid)
@@ -1146,6 +1217,24 @@ def _webhook_handler():
             on_cancel_reset=_on_cancel_reset
         )
         send_whatsapp(owner_number, result)
+        return jsonify({"status": "ok"}), 200
+
+    # 1.5 SELLER → seller inbound message flow
+    if is_seller(incoming_number):
+        seller_name = get_seller_name(incoming_number)
+        if incoming_number in seller_sessions:
+            msg_sid = send_whatsapp(
+                owner_number,
+                f"📦 *{seller_name}:* {incoming_message}"
+            )
+            if msg_sid:
+                seller_message_map[msg_sid] = incoming_number
+        else:
+            send_whatsapp(
+                owner_number,
+                f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
+                f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
+            )
         return jsonify({"status": "ok"}), 200
 
     # 2. SUPPLIER → Supplier response flow
