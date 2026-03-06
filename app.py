@@ -983,11 +983,12 @@ def _webhook_handler():
             if msg_sid:
                 seller_message_map[msg_sid] = incoming_number
         else:
-            send_whatsapp(
+            msg_sid = send_whatsapp(
                 owner_number,
                 f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
                 f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
             )
+            print(f"📤 Seller notification → owner {owner_number}: msg_sid={msg_sid}")
         return jsonify({"status": "ok"}), 200
 
     # 1. OWNER → Approval or reply-forwarding flow
