@@ -4,7 +4,6 @@ import traceback
 import hmac
 import hashlib
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect
 from dotenv import load_dotenv
@@ -13,20 +12,19 @@ from agent.parser import (
     parse_correction, interpret_option_choice, detect_needs_human,
     MODEL_TO_MAKE, resolve_make_model
 )
-from agent.sourcing import source_parts
-from agent.recommender import build_options
-from agent.approval import send_for_approval, handle_approval, send_whatsapp, send_whatsapp_image
+from agent.sourcing import source_parts_disabled
+from agent.approval import handle_approval, send_whatsapp, send_whatsapp_image
 from agent.responder import (
     generate_response, generate_quote_presentation,
-    generate_queue_confirmation, generate_multi_sourcing_summary,
+    generate_queue_confirmation,
     GOODBYE_COMPLETED, GOODBYE_MID_FLOW,
 )
-from utils.logger import log_request
+from utils.logger import log_request, log_event
 from utils.dashboard import render_dashboard
 from connectors.sheets import get_order_log
 from utils.followup import (
-    schedule_followup, cancel_followup,
-    schedule_long_wait_alert, cancel_long_wait_alert,
+    cancel_followup,
+    cancel_long_wait_alert,
 )
 from utils import monitor
 from connectors.whatsapp_supplier import (
@@ -55,6 +53,9 @@ pending_approvals      = {}
 pending_selections     = {}
 approval_message_map   = {}
 escalation_message_map = {}
+owner_briefing_map     = {}   # outbound briefing SID → customer_number
+owner_briefing_context = {}   # customer_number → {parsed, raw_message}
+pending_quotes         = {}   # customer_number → {description, price, lead_time, parsed, raw_message}
 live_sessions          = {}
 pending_live_offers    = {}
 # TTL cache: 24h retention, ~10k slots — prevents unbounded growth + idempotency gap
@@ -247,6 +248,9 @@ def _enqueue_requests(conv: dict, new_requests: list) -> None:
     """Append new parsed requests to the conversation queue."""
     for new_req in new_requests:
         item = {k: str(new_req.get(k) or "").strip() for k in ("part", "make", "model", "year")}
+        for meta in ("resolution_method", "confidence"):
+            if new_req.get(meta):
+                item[meta] = new_req[meta]
         conv["request_queue"].append(item)
     conv["last_seen"] = time.time()
 
@@ -420,6 +424,7 @@ def _handle_human_escalation(
             print(f"📋 Live session mapped: {msg_sid} → {number}")
 
     send_whatsapp(number, "Un momento, ya te contacta alguien del equipo. 👍")
+    log_event("escalation_fired", {"customer_number": number, "raw_message": message})
 
 
 # ── Missing-fields prompt ──────────────────────────────────────────────────────
@@ -458,19 +463,30 @@ def _send_queue_missing_prompt(number: str, message: str, conv: dict) -> None:
     }))
 
 
-# ── Multi-sourcing ─────────────────────────────────────────────────────────────
+# ── Owner briefing (manual sourcing mode) ──────────────────────────────────────
 
-def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
-    """Source all parts in the queue in parallel, then send approvals / not-found notices."""
+_RESOLUTION_LABELS = {
+    "layer0_wordscan":     "L0 — word scan",
+    "layer1_dict":         "L1 — dict lookup",
+    "layer2a_fuzzy_model": "L2a — fuzzy model",
+    "layer2b_fuzzy_make":  "L2b — fuzzy make (weak ⚠️)",
+    "claude_only":         "Claude only 🚩",
+    "none":                "Sin resolución ❌",
+}
+
+_CONFIDENCE_LABELS = {
+    "high":   "🟢 High",
+    "medium": "🟡 Medium",
+    "low":    "🔴 Low",
+}
+
+
+def _send_owner_briefing(number: str, message: str, queue: list) -> None:
+    """Acknowledge customer and send structured briefing to owner for each queued item."""
     count = len(queue)
     noun  = "pieza" if count == 1 else "piezas"
-    send_whatsapp(
-        number,
-        f"🔩 Recibido. Estamos buscando {'tu' if count == 1 else 'tus'} {count} {noun}, "
-        f"te confirmamos en unos minutos. ⏳"
-    )
-    schedule_followup(number, delay=300)
 
+    # Log each request as received
     for req in queue:
         log_request({
             "customer_number": number,
@@ -479,80 +495,48 @@ def _run_multi_sourcing(number: str, message: str, queue: list) -> None:
             "status":          "received",
         })
 
-    found     = []   # [(req, options)]
-    not_found = []   # [req]
+    # Existing Recibido! acknowledgment — no change to this message
+    send_whatsapp(
+        number,
+        f"🔩 Recibido. Estamos buscando {'tu' if count == 1 else 'tus'} {count} {noun}, "
+        f"te confirmamos en unos minutos. ⏳"
+    )
 
-    with ThreadPoolExecutor(max_workers=min(count, 4)) as ex:
-        future_to_req = {ex.submit(source_parts, req): req for req in queue}
-        try:
-            for fut in as_completed(future_to_req, timeout=35):  # global wait window
-                req = future_to_req[fut]
-                try:
-                    results = fut.result()
-                    if results:
-                        found.append((req, build_options(results, req)))
-                    else:
-                        not_found.append(req)
-                except Exception as e:
-                    print(f"⚠️ source_parts error for {req.get('part')}: {e}")
-                    not_found.append(req)
-        except FutureTimeoutError:
-            # Handle unfinished futures without aborting the full sourcing flow
-            for fut, req in future_to_req.items():
-                if not fut.done():
-                    print(f"⏱️ Sourcing timeout: {req.get('part')}")
-                    monitor.alert_sourcing_timeout(
-                        req.get("part", "?"), req.get("make", "?"),
-                        req.get("model", "?"), req.get("year", "?"),
-                        number,
-                    )
-                    not_found.append(req)
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    if not owner_number:
+        return
 
-    cancel_followup(number)
+    for req in queue:
+        resolution_label = _RESOLUTION_LABELS.get(
+            req.get("resolution_method", "none"), "Sin resolución ❌"
+        )
+        confidence_label = _CONFIDENCE_LABELS.get(req.get("confidence", ""), "—")
 
-    # Notify about parts not found (Alert 6) + customer summary
-    if not_found:
-        vehicle = _vehicle_str(queue)
-        send_whatsapp(number, generate_multi_sourcing_summary(found, not_found, vehicle))
-        for req in not_found:
-            log_request({
-                "customer_number": number,
-                "raw_message":     message,
-                "parsed":          req,
-                "status":          "not_found",
-            })
-            monitor.alert_part_not_found(
-                req.get("part", "?"), req.get("make", "?"),
-                req.get("model", "?"), req.get("year", "?"),
-                number,
-            )
+        briefing = (
+            f"🔩 *Nueva solicitud*\n\n"
+            f"👤 Cliente: {number}\n"
+            f"💬 Raw: \"{message}\"\n\n"
+            f"🤖 Parser:\n"
+            f"  Pieza: {req.get('part') or '—'}\n"
+            f"  Marca: {req.get('make') or '—'}\n"
+            f"  Modelo: {req.get('model') or '—'}\n"
+            f"  Año: {req.get('year') or '—'}\n"
+            f"  Resolución: {resolution_label}\n"
+            f"  Confianza: {confidence_label}\n\n"
+            f"↩️ Responde con:\n"
+            f"QUOTE | precio | entrega | descripción\n"
+            f"NOFOUND | razón\n"
+            f"NOTE | texto"
+        )
 
-    # Send approval requests for found parts; schedule 10-min waiting alert
-    for req, options in found:
-        send_for_approval(options, req, number, pending_approvals, approval_message_map)
-        schedule_long_wait_alert(number, req, delay=600)
-        log_request({
-            "customer_number": number,
-            "raw_message":     message,
-            "parsed":          req,
-            "options":         options,
-            "status":          "pending_approval",
-        })
-
-    # If nothing was found at all, reset the conversation so customer can try again
-    if not found:
-        conv = conversations.get(number)
-        if conv:
-            conv["state"]                 = ConversationState.ACTIVE
-            conv["request_queue"]         = []
-            conv["confirming"]            = False
-            conv["asking_shared_vehicle"] = False
-            conv["asking_per_item"]       = False
-            conv["current_item_index"]    = 0
-            conv["dead_end_count"]        = 0
-            conv["same_field_count"]      = 0
-            conv["last_missing_field"]    = None
-        send_whatsapp(number, "¿Necesitas algo más? Si tienes otra pieza o vehículo, cuéntame.")
+        msg_sid = send_whatsapp(owner_number, briefing)
+        if msg_sid:
+            owner_briefing_map[msg_sid] = number
+            owner_briefing_context[number] = {
+                "parsed":      req,
+                "raw_message": message,
+            }
+            print(f"📋 Owner briefing mapped: {msg_sid} → {number}")
 
 
 # ── Main customer request handler ──────────────────────────────────────────────
@@ -676,6 +660,9 @@ def process_customer_request(number: str, message: str) -> None:
                 if new_part and new_part not in queued_parts:
                     item = {k: str(new_req.get(k) or "").strip()
                             for k in ("part", "make", "model", "year")}
+                    for meta in ("resolution_method", "confidence"):
+                        if new_req.get(meta):
+                            item[meta] = new_req[meta]
                     queue.append(item)
                     queued_parts.add(new_part)
             for entry in queue:
@@ -870,6 +857,7 @@ def _handle_image_relay(message: dict) -> None:
     if caption:
         label += f"\n_{caption}_"
     print(f"📸 Customer→owner relay from {incoming_number}")
+    log_event("image_received", {"customer_number": incoming_number, "raw_message": "[image]"})
     try:
         img_bytes, _ = download_meta_media(media_id)
         new_id = upload_meta_media(img_bytes, mime_type)
@@ -982,6 +970,94 @@ def _webhook_handler():
             if store_number:
                 handle_owner_reply_to_store(store_number, incoming_message, replied_to_sid)
                 send_whatsapp(owner_number, "✅ Mensaje enviado a la tienda.")
+                return jsonify({"status": "ok"}), 200
+
+        # Reply to an owner briefing → QUOTE / NOFOUND / NOTE
+        if replied_to_sid and replied_to_sid in owner_briefing_map:
+            briefing_customer = owner_briefing_map.get(replied_to_sid)
+            ctx               = owner_briefing_context.get(briefing_customer, {})
+            cmd               = incoming_message.strip()
+            cmd_upper         = cmd.upper()
+
+            if cmd_upper.startswith("QUOTE"):
+                parts_split = cmd.split("|")
+                if len(parts_split) >= 4:
+                    precio     = parts_split[1].strip()
+                    entrega    = parts_split[2].strip()
+                    descripcion = parts_split[3].strip()
+
+                    send_whatsapp(
+                        briefing_customer,
+                        f"✅ ¡Encontramos tu pieza!\n\n"
+                        f"🔩 {descripcion}\n"
+                        f"💵 Precio: ${precio}\n"
+                        f"🚚 Entrega: {entrega}\n\n"
+                        f"¿Confirmamos el pedido? Responde *Sí* o *No*."
+                    )
+                    pending_quotes[briefing_customer] = {
+                        "description": descripcion,
+                        "price":       precio,
+                        "lead_time":   entrega,
+                        "parsed":      ctx.get("parsed", {}),
+                        "raw_message": ctx.get("raw_message", ""),
+                    }
+                    owner_briefing_map.pop(replied_to_sid, None)
+                    send_whatsapp(owner_number, "✅ Cotización enviada al cliente.")
+                    log_request({
+                        "customer_number": briefing_customer,
+                        "raw_message":     ctx.get("raw_message", ""),
+                        "parsed":          ctx.get("parsed", {}),
+                        "status":          "quoted",
+                        "quote_price":     precio,
+                        "lead_time":       entrega,
+                    })
+                else:
+                    send_whatsapp(owner_number,
+                        "⚠️ Formato incorrecto. Usa: QUOTE | precio | entrega | descripción")
+                return jsonify({"status": "ok"}), 200
+
+            elif cmd_upper.startswith("NOFOUND"):
+                parts_split = cmd.split("|", 1)
+                razon = parts_split[1].strip() if len(parts_split) > 1 else ""
+                not_found_msg = "Lo sentimos, no encontramos esa pieza en este momento."
+                if razon:
+                    not_found_msg += f" {razon}"
+                send_whatsapp(briefing_customer, not_found_msg)
+                owner_briefing_map.pop(replied_to_sid, None)
+                # Reset customer conversation so they can try again
+                with _state_lock:
+                    conv = conversations.get(briefing_customer)
+                    if conv:
+                        conv["state"]                 = ConversationState.ACTIVE
+                        conv["request_queue"]         = []
+                        conv["confirming"]            = False
+                        conv["asking_shared_vehicle"] = False
+                        conv["asking_per_item"]       = False
+                        conv["current_item_index"]    = 0
+                        conv["dead_end_count"]        = 0
+                        conv["same_field_count"]      = 0
+                        conv["last_missing_field"]    = None
+                send_whatsapp(owner_number, "✅ Cliente notificado — sin stock.")
+                log_request({
+                    "customer_number": briefing_customer,
+                    "raw_message":     ctx.get("raw_message", ""),
+                    "parsed":          ctx.get("parsed", {}),
+                    "status":          "not_found",
+                    "owner_notes":     razon,
+                })
+                return jsonify({"status": "ok"}), 200
+
+            elif cmd_upper.startswith("NOTE"):
+                parts_split = cmd.split("|", 1)
+                texto = parts_split[1].strip() if len(parts_split) > 1 else cmd
+                send_whatsapp(owner_number, "📝 Nota guardada.")
+                log_request({
+                    "customer_number": briefing_customer,
+                    "raw_message":     ctx.get("raw_message", ""),
+                    "parsed":          ctx.get("parsed", {}),
+                    "status":          "note",
+                    "owner_notes":     texto,
+                })
                 return jsonify({"status": "ok"}), 200
 
         # Reply to a live session / escalation message
@@ -1221,6 +1297,60 @@ def _webhook_handler():
 
         return jsonify({"status": "ok"}), 200
 
+    # 6.1 PENDING QUOTE → customer confirming or declining a quote from owner
+    if incoming_number in pending_quotes:
+        _YES_WORDS = {"sí", "si", "dale", "va", "ok", "okey", "sip", "claro"}
+        _NO_WORDS  = {"no", "nop", "negativo"}
+        cmd_lower  = incoming_message.strip().lower().rstrip("!")
+        _base      = cmd_lower.rstrip("i")
+        is_yes = (
+            cmd_lower in _YES_WORDS
+            or _base in ("s", "si", "sí")
+            or any(cmd_lower.startswith(w + " ") for w in _YES_WORDS)
+        )
+        is_no = cmd_lower in _NO_WORDS
+
+        if is_yes:
+            quote = pending_quotes.pop(incoming_number)
+            send_whatsapp(
+                incoming_number,
+                "🎉 *¡Perfecto!* Tu pedido está confirmado. "
+                "Te contactamos para coordinar la entrega. 🙌"
+            )
+            send_whatsapp(
+                owner_number,
+                f"🎯 Cliente confirmó. Coordinar entrega con {incoming_number}"
+            )
+            log_request({
+                "customer_number": incoming_number,
+                "raw_message":     incoming_message,
+                "parsed":          quote.get("parsed", {}),
+                "status":          "confirmed",
+                "quote_price":     quote.get("price", ""),
+                "lead_time":       quote.get("lead_time", ""),
+                "owner_notes":     quote.get("description", ""),
+            })
+            conversations.pop(incoming_number, None)
+            monitor.increment_stat("orders_confirmed")
+
+        elif is_no:
+            quote = pending_quotes.pop(incoming_number)
+            send_whatsapp(
+                incoming_number,
+                "Entendido, sin problema. Si necesitas algo más estamos aquí. 👋"
+            )
+            log_request({
+                "customer_number": incoming_number,
+                "raw_message":     incoming_message,
+                "parsed":          quote.get("parsed", {}),
+                "status":          "declined",
+            })
+
+        else:
+            send_whatsapp(incoming_number, "¿Confirmamos el pedido? Responde *Sí* o *No*.")
+
+        return jsonify({"status": "ok"}), 200
+
     # 6.5 CONFIRMING → customer confirming or correcting their queued request
     conv = conversations.get(incoming_number)
     if conv and conv.get("confirming"):
@@ -1233,7 +1363,7 @@ def _webhook_handler():
             conv["request_queue"] = []
 
             threading.Thread(
-                target=_run_multi_sourcing,
+                target=_send_owner_briefing,
                 args=(incoming_number, incoming_message, queue),
                 daemon=True,
             ).start()

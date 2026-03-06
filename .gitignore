@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 google_credentials.json
 .DS_Store
+*.pdf

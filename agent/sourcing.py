@@ -46,6 +46,12 @@ def search_single_sheet_supplier(supplier: dict, parsed: dict) -> dict | None:
         print(f"Error searching {supplier['name']}: {e}")
         return None
 
+def source_parts_disabled() -> list:
+    """Auto-sourcing disabled — manual mode active. Returns empty list."""
+    print("🚫 Auto-sourcing disabled — manual mode active")
+    return []
+
+
 def source_parts(parsed: dict) -> list:
     """
     Query all suppliers simultaneously and return

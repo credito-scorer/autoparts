@@ -247,6 +247,7 @@ def resolve_make_model(parsed: dict, raw_message: str) -> dict:
     - Layer 0: raw message word scan (catches model: null from Claude)
     - Layer 1: MODEL_TO_MAKE exact + case-insensitive dict lookup
     - Layer 2: Rapidfuzz fuzzy match on model name or raw message words
+    Also sets parsed["resolution_method"] once (first layer that contributes).
     """
     make  = parsed.get("make")
     model = parsed.get("model")
@@ -267,6 +268,8 @@ def resolve_make_model(parsed: dict, raw_message: str) -> dict:
                 if not make:
                     parsed["make"] = MODEL_TO_MAKE[key]
                     make = parsed["make"]
+                if not parsed.get("resolution_method"):
+                    parsed["resolution_method"] = "layer0_wordscan"
                 break
 
     # Normalize make if Claude already provided one
@@ -288,6 +291,8 @@ def resolve_make_model(parsed: dict, raw_message: str) -> dict:
         if inferred:
             parsed["make"] = inferred
             make = inferred
+            if not parsed.get("resolution_method"):
+                parsed["resolution_method"] = "layer1_dict"
 
     # Layer 2a: fuzzy model → make lookup
     if not make and model:
@@ -296,12 +301,24 @@ def resolve_make_model(parsed: dict, raw_message: str) -> dict:
             parsed["model"] = best_model
             parsed["make"]  = MODEL_TO_MAKE[best_model]
             make = parsed["make"]
+            if not parsed.get("resolution_method"):
+                parsed["resolution_method"] = "layer2a_fuzzy_model"
 
     # Layer 2b: scan raw message for make name
     if not make:
         found = _fuzzy_match_make(raw_message)
         if found:
             parsed["make"] = found
+            if not parsed.get("resolution_method"):
+                parsed["resolution_method"] = "layer2b_fuzzy_make"
+
+    # Set resolution_method if no local layer contributed
+    if not parsed.get("resolution_method"):
+        if parsed.get("make") or parsed.get("model"):
+            # Claude extracted make/model but no local layer verified it
+            parsed["resolution_method"] = "claude_only"
+        else:
+            parsed["resolution_method"] = "none"
 
     return parsed
 
