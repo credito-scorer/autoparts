@@ -971,8 +971,10 @@ def _webhook_handler():
     # 1.5 SELLER → must be checked before the owner block so that a whitelisted
     # seller whose number happens to match owner_number is not swallowed by the
     # owner flow and silently returned before the seller check is reached.
+    print(f"🧪 SELLER CHECK: incoming={incoming_number} is_seller={is_seller(incoming_number)} owner={owner_number}")
     if is_seller(incoming_number):
         seller_name = get_seller_name(incoming_number)
+        print(f"✅ Seller matched: name={seller_name} in_session={incoming_number in seller_sessions}")
         if incoming_number in seller_sessions:
             msg_sid = send_whatsapp(
                 owner_number,
