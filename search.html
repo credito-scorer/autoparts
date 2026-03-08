@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Zeli — Búsqueda de Catálogo</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --surface2: #1a1a1a;
+  --border: #222222;
+  --border2: #2a2a2a;
+  --accent: #00ff88;
+  --accent-dim: rgba(0,255,136,0.12);
+  --accent-dim2: rgba(0,255,136,0.06);
+  --warn: #ffaa00;
+  --warn-dim: rgba(255,170,0,0.1);
+  --red: #ff4444;
+  --text: #e8e8e8;
+  --text-dim: #666666;
+  --text-mid: #999999;
+  --mono: 'IBM Plex Mono', monospace;
+  --sans: 'IBM Plex Sans', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  padding-bottom: 40px;
+}
+
+/* ── LOGIN SCREEN ── */
+#login-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 32px;
+}
+
+.login-logo {
+  text-align: center;
+}
+
+.login-logo .wordmark {
+  font-family: var(--mono);
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -1px;
+}
+
+.login-logo .sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+
+.login-box {
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  padding: 28px 24px;
+}
+
+.login-box label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: block;
+  margin-bottom: 10px;
+}
+
+.login-box input[type="password"] {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 16px;
+  padding: 14px 16px;
+  outline: none;
+  letter-spacing: 4px;
+  margin-bottom: 16px;
+  -webkit-appearance: none;
+}
+
+.login-box input[type="password"]:focus {
+  border-color: var(--accent);
+}
+
+.btn-login {
+  width: 100%;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 14px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-login:active { opacity: 0.8; }
+
+.login-error {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--red);
+  text-align: center;
+  margin-top: 12px;
+  display: none;
+}
+
+/* ── MAIN APP ── */
+#app { display: none; }
+
+/* ── HEADER ── */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 20px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-left .wordmark {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.5px;
+}
+
+.header-left .sub {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.index-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(0,255,136,0.2);
+  padding: 4px 10px;
+  letter-spacing: 1px;
+}
+
+/* ── SEARCH BAR ── */
+.search-wrap {
+  padding: 16px 20px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  padding: 0 16px;
+  transition: border-color 0.15s;
+}
+
+.search-field:focus-within {
+  border-color: var(--accent);
+}
+
+.search-icon {
+  color: var(--text-dim);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.search-field input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  padding: 14px 0;
+  -webkit-appearance: none;
+}
+
+.search-field input::placeholder {
+  color: var(--text-dim);
+}
+
+.clear-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  display: none;
+  line-height: 1;
+}
+
+/* ── FILTERS ── */
+.filters {
+  padding: 10px 20px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.filters::-webkit-scrollbar { display: none; }
+
+.filter-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border: 1px solid var(--border2);
+  color: var(--text-mid);
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  -webkit-appearance: none;
+}
+
+.filter-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim2);
+}
+
+/* ── RESULTS AREA ── */
+.results-meta {
+  padding: 12px 20px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.results-meta span { color: var(--accent); }
+
+/* ── PART CARD ── */
+.part-card {
+  margin: 0 16px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  animation: slideUp 0.2s ease both;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.part-card-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.part-description {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+
+.part-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.part-number {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-mid);
+  background: var(--surface2);
+  padding: 2px 8px;
+  letter-spacing: 1px;
+}
+
+.part-make {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-dim2);
+  padding: 2px 8px;
+  letter-spacing: 1px;
+}
+
+.part-year {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+
+.part-card-body {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.part-price-wrap {}
+
+.part-price-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+.part-price {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.part-price.no-price {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.part-dist {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  letter-spacing: 0.5px;
+}
+
+.part-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-copy {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  -webkit-appearance: none;
+}
+
+.btn-copy:active { opacity: 0.7; }
+.btn-copy.copied {
+  background: var(--surface2);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.btn-page {
+  background: var(--surface2);
+  color: var(--text-mid);
+  border: 1px solid var(--border2);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 10px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-appearance: none;
+}
+
+/* ── EMPTY STATES ── */
+.empty-state {
+  text-align: center;
+  padding: 60px 32px;
+  color: var(--text-dim);
+}
+
+.empty-state .icon {
+  font-size: 40px;
+  margin-bottom: 16px;
+  opacity: 0.4;
+}
+
+.empty-state .title {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text-mid);
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.empty-state .hint {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* ── LOAD MORE ── */
+.load-more-wrap {
+  padding: 16px 20px;
+  text-align: center;
+}
+
+.btn-load-more {
+  background: none;
+  border: 1px solid var(--border2);
+  color: var(--text-mid);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px 28px;
+  cursor: pointer;
+  transition: all 0.15s;
+  -webkit-appearance: none;
+}
+
+.btn-load-more:active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── TOAST ── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--accent);
+  color: #000;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 12px 24px;
+  z-index: 999;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── STATS BAR ── */
+.stats-bar {
+  padding: 10px 20px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.stats-bar::-webkit-scrollbar { display: none; }
+
+.stat-item {
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.stat-value {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.stat-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-logo">
+    <div class="wordmark">ZELI</div>
+    <div class="sub">Búsqueda de Catálogo</div>
+  </div>
+  <div class="login-box">
+    <label>Contraseña de acceso</label>
+    <input type="password" id="pwd-input" placeholder="••••••••" autocomplete="current-password">
+    <button class="btn-login" onclick="attemptLogin()">Entrar</button>
+    <div class="login-error" id="login-error">Contraseña incorrecta</div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+
+  <div class="header">
+    <div class="header-left">
+      <div class="wordmark">ZELI</div>
+      <div class="sub">Catálogo · Búsqueda</div>
+    </div>
+    <div class="index-pill" id="total-pill">0 partes</div>
+  </div>
+
+  <div class="stats-bar" id="stats-bar" style="display:none">
+    <!-- populated by JS -->
+  </div>
+
+  <div class="search-wrap">
+    <div class="search-field">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input"
+             placeholder="filtro aceite, alternador, correa..."
+             autocomplete="off" autocorrect="off"
+             spellcheck="false"
+             oninput="onSearch(this.value)">
+      <button class="clear-btn" id="clear-btn" onclick="clearSearch()">✕</button>
+    </div>
+  </div>
+
+  <div class="filters" id="filters-row">
+    <button class="filter-chip active" data-make="all" onclick="setMake('all', this)">Todos</button>
+    <!-- Makes populated by JS -->
+  </div>
+
+  <div id="results-meta" class="results-meta" style="display:none"></div>
+
+  <div id="results-container"></div>
+
+  <div id="load-more-wrap" class="load-more-wrap" style="display:none">
+    <button class="btn-load-more" onclick="loadMore()">Ver más resultados</button>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+// Password is checked client-side for simplicity.
+// For production, replace with server-side session auth.
+const ACCESS_PASSWORD = "zeli2026";
+
+// Path to the catalogue index JSON — forwards ?key= from the current URL
+const INDEX_URL = "/catalogue_index.json?key=" + new URLSearchParams(window.location.search).get('key');
+
+// ── STATE ───────────────────────────────────────────────────────────────────
+let allParts = [];
+let filteredParts = [];
+let activeMake = "all";
+let currentPage = 0;
+const PAGE_SIZE = 20;
+let searchTimer = null;
+
+// ── AUTH ─────────────────────────────────────────────────────────────────────
+function attemptLogin() {
+  const val = document.getElementById("pwd-input").value;
+  if (val === ACCESS_PASSWORD) {
+    document.getElementById("login-screen").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    loadIndex();
+  } else {
+    document.getElementById("login-error").style.display = "block";
+    document.getElementById("pwd-input").value = "";
+    document.getElementById("pwd-input").focus();
+  }
+}
+
+document.getElementById("pwd-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") attemptLogin();
+});
+
+// ── DATA LOADING ─────────────────────────────────────────────────────────────
+async function loadIndex() {
+  try {
+    const res = await fetch(INDEX_URL);
+    if (!res.ok) throw new Error("Index not found");
+    allParts = await res.json();
+    initUI();
+  } catch (e) {
+    // Demo mode — load sample data so the UI is usable for testing
+    allParts = generateSampleData();
+    showToast("⚠️ Modo demo — carga tu catálogo real");
+    initUI();
+  }
+}
+
+function generateSampleData() {
+  const samples = [
+    { id: "1", distributor: "Distribuidor Central", description: "Filtro de aceite Toyota Corolla", part_number: "90915-YZZF2", price: 8.50, make: "Toyota", model: "Corolla", year_range: "2009-2019", category: "Filtros", page: 12 },
+    { id: "2", distributor: "Distribuidor Central", description: "Filtro de aire Hyundai Tucson", part_number: "28113-2E000", price: 14.00, make: "Hyundai", model: "Tucson", year_range: "2010-2018", category: "Filtros", page: 14 },
+    { id: "3", distributor: "Auto Partes Panama", description: "Pastillas de freno delanteras Kia Sportage", part_number: "58101-3XA30", price: 32.00, make: "Kia", model: "Sportage", year_range: "2011-2016", category: "Frenos", page: 45 },
+    { id: "4", distributor: "Distribuidor Central", description: "Alternador Nissan Sentra 120A", part_number: "23100-ET00A", price: 145.00, make: "Nissan", model: "Sentra", year_range: "2013-2020", category: "Eléctrico", page: 78 },
+    { id: "5", distributor: "Auto Partes Panama", description: "Correa de distribución Honda Civic", part_number: "14400-RTA-004", price: 28.00, make: "Honda", model: "Civic", year_range: "2006-2011", category: "Motor", page: 92 },
+    { id: "6", distributor: "Repuestos Santiago", description: "Amortiguador trasero Toyota Hilux", part_number: "48531-0K160", price: 68.00, make: "Toyota", model: "Hilux", year_range: "2005-2015", category: "Suspensión", page: 103 },
+    { id: "7", distributor: "Repuestos Santiago", description: "Bomba de agua Mitsubishi Montero", part_number: "MD997611", price: 42.00, make: "Mitsubishi", model: "Montero", year_range: "2000-2008", category: "Refrigeración", page: 118 },
+    { id: "8", distributor: "Distribuidor Central", description: "Sensor de oxígeno Chevrolet Aveo", part_number: "96418775", price: 35.00, make: "Chevrolet", model: "Aveo", year_range: "2008-2017", category: "Eléctrico", page: 134 },
+    { id: "9", distributor: "Auto Partes Panama", description: "Kit de embrague Kia Picanto", part_number: "41200-32300", price: 95.00, make: "Kia", model: "Picanto", year_range: "2012-2020", category: "Transmisión", page: 67 },
+    { id: "10", distributor: "Repuestos Santiago", description: "Filtro de combustible Mazda 3", part_number: "KL47-20-490", price: 12.00, make: "Mazda", model: "Mazda 3", year_range: "2004-2013", category: "Filtros", page: 16 },
+  ];
+  return samples;
+}
+
+// ── UI INIT ───────────────────────────────────────────────────────────────────
+function initUI() {
+  // Update total pill
+  document.getElementById("total-pill").textContent = `${allParts.length.toLocaleString()} partes`;
+
+  // Build makes filter
+  const makes = [...new Set(allParts.map(p => p.make).filter(Boolean))].sort();
+  const filtersRow = document.getElementById("filters-row");
+  makes.forEach(make => {
+    const btn = document.createElement("button");
+    btn.className = "filter-chip";
+    btn.dataset.make = make;
+    btn.textContent = make;
+    btn.onclick = () => setMake(make, btn);
+    filtersRow.appendChild(btn);
+  });
+
+  // Stats bar
+  if (allParts.length > 0) {
+    const distributors = [...new Set(allParts.map(p => p.distributor))];
+    const statsBar = document.getElementById("stats-bar");
+    statsBar.style.display = "flex";
+
+    const stats = [
+      { value: allParts.length.toLocaleString(), label: "Partes" },
+      { value: distributors.length, label: "Distribuidores" },
+      { value: allParts.filter(p => p.price).length.toLocaleString(), label: "Con precio" },
+      { value: makes.length, label: "Marcas" },
+    ];
+
+    statsBar.innerHTML = stats.map(s => `
+      <div class="stat-item">
+        <div class="stat-value">${s.value}</div>
+        <div class="stat-label">${s.label}</div>
+      </div>
+    `).join('');
+  }
+
+  renderInitialState();
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────────────────
+function onSearch(query) {
+  const clearBtn = document.getElementById("clear-btn");
+  clearBtn.style.display = query ? "block" : "none";
+
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => doSearch(query), 180);
+}
+
+function clearSearch() {
+  document.getElementById("search-input").value = "";
+  document.getElementById("clear-btn").style.display = "none";
+  doSearch("");
+  document.getElementById("search-input").focus();
+}
+
+function setMake(make, btn) {
+  activeMake = make;
+  document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+  btn.classList.add("active");
+  const query = document.getElementById("search-input").value;
+  doSearch(query);
+}
+
+function doSearch(query) {
+  const q = query.trim().toLowerCase();
+  currentPage = 0;
+
+  filteredParts = allParts.filter(part => {
+    const makeMatch = activeMake === "all" || part.make === activeMake;
+    if (!makeMatch) return false;
+    if (!q) return true;
+
+    const searchable = [
+      part.description,
+      part.part_number,
+      part.make,
+      part.model,
+      part.year_range,
+      part.distributor,
+      part.category
+    ].join(" ").toLowerCase();
+
+    // Multi-word search — all words must match
+    return q.split(/\s+/).every(word => searchable.includes(word));
+  });
+
+  renderResults();
+}
+
+// ── RENDER ────────────────────────────────────────────────────────────────────
+function renderInitialState() {
+  const container = document.getElementById("results-container");
+  container.innerHTML = `
+    <div class="empty-state">
+      <div class="icon">🔩</div>
+      <div class="title">Busca una pieza</div>
+      <div class="hint">Escribe descripción, número de parte, marca o modelo</div>
+    </div>
+  `;
+  document.getElementById("results-meta").style.display = "none";
+  document.getElementById("load-more-wrap").style.display = "none";
+}
+
+function renderResults() {
+  const container = document.getElementById("results-container");
+  const meta = document.getElementById("results-meta");
+  const loadMoreWrap = document.getElementById("load-more-wrap");
+  const query = document.getElementById("search-input").value.trim();
+
+  if (!query && activeMake === "all") {
+    renderInitialState();
+    return;
+  }
+
+  const total = filteredParts.length;
+  const pageEnd = (currentPage + 1) * PAGE_SIZE;
+  const toShow = filteredParts.slice(0, pageEnd);
+
+  meta.style.display = "block";
+  if (total === 0) {
+    meta.innerHTML = "Sin resultados";
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🔍</div>
+        <div class="title">No encontrado en catálogos</div>
+        <div class="hint">Sourcing manual requerido — contacta a Gladys o Luis</div>
+      </div>
+    `;
+    loadMoreWrap.style.display = "none";
+    return;
+  }
+
+  meta.innerHTML = `<span>${total.toLocaleString()}</span> resultado${total !== 1 ? 's' : ''}`;
+
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+
+  container.innerHTML = toShow.map((part, i) => {
+    const delay = Math.min(i % PAGE_SIZE, 8) * 30;
+    const desc = highlight(part.description || "—", terms);
+    const pn = highlight(part.part_number || "", terms);
+    const priceHTML = part.price
+      ? `<div class="part-price">$${Number(part.price).toFixed(2)}</div>`
+      : `<div class="part-price no-price">Sin precio</div>`;
+
+    return `
+      <div class="part-card" style="animation-delay:${delay}ms">
+        <div class="part-card-header">
+          <div class="part-description">${desc}</div>
+          <div class="part-meta-row">
+            ${pn ? `<span class="part-number">${pn}</span>` : ''}
+            ${part.make ? `<span class="part-make">${part.make}</span>` : ''}
+            ${part.year_range ? `<span class="part-year">${part.year_range}</span>` : ''}
+          </div>
+        </div>
+        <div class="part-card-body">
+          <div class="part-price-wrap">
+            <div class="part-price-label">Precio</div>
+            ${priceHTML}
+            <div class="part-dist">${part.distributor || '—'}</div>
+          </div>
+          <div class="part-actions">
+            <button class="btn-copy" onclick="copyQuote(this, '${escapeAttr(part)}')">
+              Copiar
+            </button>
+            ${part.page ? `<button class="btn-page" title="Página en catálogo">p.${part.page}</button>` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  loadMoreWrap.style.display = (pageEnd < total) ? "block" : "none";
+}
+
+function loadMore() {
+  currentPage++;
+  renderResults();
+  // Scroll to roughly where new results start
+  const cards = document.querySelectorAll(".part-card");
+  const firstNew = cards[currentPage * PAGE_SIZE];
+  if (firstNew) firstNew.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── HIGHLIGHT ─────────────────────────────────────────────────────────────────
+function highlight(text, terms) {
+  if (!terms.length || !text) return text;
+  let result = text;
+  terms.forEach(term => {
+    const regex = new RegExp(`(${escapeRegex(term)})`, 'gi');
+    result = result.replace(regex, '<mark style="background:rgba(0,255,136,0.25);color:inherit;border-radius:2px;">$1</mark>');
+  });
+  return result;
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ── COPY QUOTE ────────────────────────────────────────────────────────────────
+function escapeAttr(part) {
+  return encodeURIComponent(JSON.stringify({
+    description: part.description,
+    part_number: part.part_number,
+    price: part.price,
+    distributor: part.distributor,
+    make: part.make,
+    model: part.model,
+    year_range: part.year_range
+  }));
+}
+
+function copyQuote(btn, encoded) {
+  const part = JSON.parse(decodeURIComponent(encoded));
+  const lines = [];
+  lines.push(`🔩 *${part.description || 'Pieza'}*`);
+  if (part.make || part.model) lines.push(`${[part.make, part.model, part.year_range].filter(Boolean).join(' ')}`);
+  if (part.part_number) lines.push(`Ref: ${part.part_number}`);
+  if (part.price) lines.push(`💵 Precio: *$${Number(part.price).toFixed(2)}*`);
+  lines.push(`📦 Distribuidor: ${part.distributor || '—'}`);
+  lines.push(`🚚 Entrega: 1-2 días`);
+
+  const text = lines.join('\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = "✓ Copiado";
+    btn.classList.add("copied");
+    showToast("✓ Cotización copiada");
+    setTimeout(() => {
+      btn.textContent = "Copiar";
+      btn.classList.remove("copied");
+    }, 2000);
+  }).catch(() => {
+    // Fallback for older mobile browsers
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    btn.textContent = "✓ Copiado";
+    btn.classList.add("copied");
+    showToast("✓ Cotización copiada");
+    setTimeout(() => {
+      btn.textContent = "Copiar";
+      btn.classList.remove("copied");
+    }, 2000);
+  });
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+</script>
+</body>
+</html>

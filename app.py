@@ -971,10 +971,8 @@ def _webhook_handler():
     # 1.5 SELLER → must be checked before the owner block so that a whitelisted
     # seller whose number happens to match owner_number is not swallowed by the
     # owner flow and silently returned before the seller check is reached.
-    print(f"🧪 SELLER CHECK: incoming={incoming_number} is_seller={is_seller(incoming_number)} owner={owner_number}")
     if is_seller(incoming_number):
         seller_name = get_seller_name(incoming_number)
-        print(f"✅ Seller matched: name={seller_name} in_session={incoming_number in seller_sessions}")
         if incoming_number in seller_sessions:
             msg_sid = send_whatsapp(
                 owner_number,
@@ -983,12 +981,11 @@ def _webhook_handler():
             if msg_sid:
                 seller_message_map[msg_sid] = incoming_number
         else:
-            msg_sid = send_whatsapp(
+            send_whatsapp(
                 owner_number,
                 f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
                 f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
             )
-            print(f"📤 Seller notification → owner {owner_number}: msg_sid={msg_sid}")
         return jsonify({"status": "ok"}), 200
 
     # 1. OWNER → Approval or reply-forwarding flow
@@ -1711,6 +1708,27 @@ def dashboard_ai_insights():
     except Exception as e:
         print(f"⚠️ AI insights error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/search", methods=["GET"])
+def catalogue_search():
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if request.args.get("key") != password:
+        return redirect("/?failed=1", 302)
+    return make_response(open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read(), 200)
+
+
+@app.route("/catalogue_index.json", methods=["GET"])
+def catalogue_index_json():
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if request.args.get("key") != password:
+        return jsonify({"error": "unauthorized"}), 401
+    index_path = os.path.join(os.path.dirname(__file__), "data", "catalogue_index.json")
+    if not os.path.exists(index_path):
+        return jsonify([]), 200
+    with open(index_path, encoding="utf-8") as f:
+        import json as _json
+        return make_response(_json.load(f), 200)
 
 
 @app.route("/", methods=["GET"])
