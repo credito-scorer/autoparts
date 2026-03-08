@@ -305,9 +305,21 @@ def process_folder(folder_path: str):
     if not pdfs:
         print(f"❌ No PDFs found in {folder_path}")
         return
+
+    # Load optional name map
+    name_map = {}
+    distributors_file = folder / "distributors.json"
+    if distributors_file.exists():
+        with open(distributors_file, encoding="utf-8") as f:
+            name_map = json.load(f)
+        print(f"📋 Loaded distributors.json ({len(name_map)} entries)")
+
     print(f"📂 Found {len(pdfs)} PDFs to process")
     for pdf in pdfs:
-        distributor = pdf.stem.replace("_", " ").replace("-", " ").title()
+        if pdf.name in name_map:
+            distributor = name_map[pdf.name]
+        else:
+            distributor = pdf.stem.replace("_", " ").replace("-", " ").title()
         process_pdf(str(pdf), distributor)
     print(f"\n✅ Batch complete. Index at: {INDEX_FILE}")
 
