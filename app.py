@@ -1718,6 +1718,12 @@ def catalogue_search():
     return make_response(open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read(), 200)
 
 
+@app.route("/search-debug", methods=["GET"])
+def search_debug():
+    val = os.getenv("DASHBOARD_PASSWORD", "NOT_SET")
+    return make_response(f"DASHBOARD_PASSWORD={val!r}", 200, {"Content-Type": "text/plain"})
+
+
 @app.route("/catalogue_index.json", methods=["GET"])
 def catalogue_index_json():
     password = os.getenv("DASHBOARD_PASSWORD", "")
