@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import traceback
 import hmac
@@ -57,9 +58,17 @@ escalation_message_map = {}
 owner_briefing_map     = {}   # outbound briefing SID → customer_number
 owner_briefing_context = {}   # customer_number → {parsed, raw_message}
 pending_quotes         = {}   # customer_number → {description, price, lead_time, parsed, raw_message}
+pending_urgency        = {}   # customer_number → {queue, raw_message, attempts}
 live_sessions          = {}
 pending_live_offers    = {}
 seller_sessions        = {}
+
+# In-memory catalogue search index — loaded once at startup
+CATALOGUE_INDEX: list = []
+
+# Urgency detection phrase lists
+_URGENCY_NOW  = ["hoy", "urgente", "ya", "ahora", "lo antes posible"]
+_URGENCY_WAIT = ["esperar", "1-2", "días", "dias", "mañana", "no urgente", "puede esperar"]
 # Maps seller_number → owner session context
 # { "+507...": { "name": "Luis", "started_at": "..." } }
 seller_message_map     = {}
@@ -544,6 +553,105 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
                 "raw_message": message,
             }
             print(f"📋 Owner briefing mapped: {msg_sid} → {number}")
+
+
+# ── Catalogue search (urgency flow) ───────────────────────────────────────────
+
+def _load_catalogue_index() -> None:
+    """Load data/catalogue_index.json into memory at startup."""
+    global CATALOGUE_INDEX
+    try:
+        path = os.path.join(os.path.dirname(__file__), "data", "catalogue_index.json")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                CATALOGUE_INDEX = json.load(f)
+            print(f"📚 Catalogue index loaded: {len(CATALOGUE_INDEX)} parts")
+        else:
+            print("⚠️ No catalogue index found — catalogue search disabled")
+    except Exception as e:
+        print(f"⚠️ Could not load catalogue index: {e}")
+
+
+def search_catalogue(part: str, make: str) -> list[dict]:
+    """
+    Search the in-memory catalogue index.
+    All words in `part` must appear in the item's description or part_number.
+    Optionally narrows by make. Returns up to 3 results sorted by price ascending.
+    """
+    if not CATALOGUE_INDEX or not part:
+        return []
+    words = [w for w in part.lower().split() if len(w) > 2]
+    if not words:
+        return []
+    make_lower = (make or "").lower()
+    results = []
+    for item in CATALOGUE_INDEX:
+        combined = (
+            (item.get("description") or "") + " " + (item.get("part_number") or "")
+        ).lower()
+        if not all(w in combined for w in words):
+            continue
+        if make_lower:
+            item_make = (item.get("make") or "").lower()
+            if item_make and make_lower not in item_make and item_make not in make_lower:
+                continue
+        results.append(item)
+    results.sort(key=lambda x: (x.get("price") is None, x.get("price") or 0))
+    return results[:3]
+
+
+def _send_catalogue_options(number: str, raw_message: str, queue: list, results: list[dict]) -> None:
+    """Present up to 3 catalogue results to the customer as selectable options."""
+    req = queue[0] if queue else {}
+    log_request({
+        "customer_number": number,
+        "raw_message":     raw_message,
+        "parsed":          req,
+        "status":          "catalogue_search",
+        "catalogue_results": len(results),
+    })
+    if len(results) == 1:
+        r = results[0]
+        price_str = f"${r['price']:.2f}" if r.get("price") else "Sin precio"
+        send_whatsapp(
+            number,
+            f"✅ Encontré esto en catálogo:\n\n"
+            f"🔩 {r.get('description', '—')}\n"
+            f"💵 {price_str}\n"
+            f"📦 {r.get('distributor', '—')}\n\n"
+            f"¿Te sirve? Responde *Sí* o *No*."
+        )
+        pending_quotes[number] = {
+            "description": r.get("description", ""),
+            "price":       r.get("price"),
+            "lead_time":   "1-2 días",
+            "parsed":      req,
+            "raw_message": raw_message,
+        }
+    else:
+        lines = ["✅ Encontré estas opciones en catálogo:\n"]
+        for i, r in enumerate(results, 1):
+            price_str = f"${r['price']:.2f}" if r.get("price") else "Sin precio"
+            lines.append(
+                f"*{i}.* {r.get('description', '—')} — {price_str} ({r.get('distributor', '—')})"
+            )
+        lines.append("\n¿Cuál prefieres? Responde con el número (1, 2 o 3).")
+        send_whatsapp(number, "\n".join(lines))
+        options = [
+            {
+                "supplier_name": r.get("distributor", "Catálogo"),
+                "lead_time":     "1-2 días",
+                "description":   r.get("description", ""),
+                "part_number":   r.get("part_number", ""),
+            }
+            for r in results
+        ]
+        final_prices = [r.get("price") or 0 for r in results]
+        pending_selections[number] = {
+            "options":      options,
+            "final_prices": final_prices,
+            "parsed":       req,
+        }
 
 
 # ── Main customer request handler ──────────────────────────────────────────────
@@ -1442,6 +1550,73 @@ def _webhook_handler():
 
         return jsonify({"status": "ok"}), 200
 
+    # 6.2 PENDING URGENCY → customer answering "need it today or can wait?"
+    if incoming_number in pending_urgency:
+        urgency_data = pending_urgency[incoming_number]
+        queue        = urgency_data["queue"]
+        raw          = urgency_data["raw_message"]
+        msg_lower    = incoming_message.lower().strip()
+
+        is_urgent = any(p in msg_lower for p in _URGENCY_NOW)
+        can_wait  = any(p in msg_lower for p in _URGENCY_WAIT)
+
+        if is_urgent:
+            pending_urgency.pop(incoming_number, None)
+            send_whatsapp(
+                incoming_number,
+                "Entendido, estamos en eso ahora mismo. ⚡ Te confirmamos en breve."
+            )
+            req = queue[0] if queue else {}
+            msg_sid = send_whatsapp(
+                owner_number,
+                f"⚡ *Sourcing Urgente — Live Mode*\n"
+                f"Cliente: {incoming_number}\n"
+                f"Pieza: {req.get('part', '?')} — "
+                f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
+                f"❗ Necesita hoy. Toma el hilo directamente."
+            )
+            if msg_sid:
+                with _state_lock:
+                    escalation_message_map[msg_sid] = incoming_number
+            return jsonify({"status": "ok"}), 200
+
+        if can_wait or urgency_data["attempts"] >= 1:
+            pending_urgency.pop(incoming_number, None)
+            send_whatsapp(incoming_number, "Perfecto, déjame revisar. ⏳")
+            req     = queue[0] if queue else {}
+            results = search_catalogue(req.get("part", ""), req.get("make", ""))
+            if results:
+                threading.Thread(
+                    target=_send_catalogue_options,
+                    args=(incoming_number, raw, queue, results),
+                    daemon=True,
+                ).start()
+            else:
+                msg_sid = send_whatsapp(
+                    owner_number,
+                    f"🔍 *Sourcing Manual Requerido*\n"
+                    f"Cliente: {incoming_number}\n"
+                    f"Pieza: {req.get('part', '?')} — "
+                    f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
+                    f"❌ No encontrado en catálogos\n"
+                    f"↩️ Responde con precio y disponibilidad"
+                )
+                if msg_sid:
+                    owner_briefing_map[msg_sid] = incoming_number
+                    owner_briefing_context[incoming_number] = {
+                        "parsed":      req,
+                        "raw_message": raw,
+                    }
+            return jsonify({"status": "ok"}), 200
+
+        # Didn't match either pattern — re-ask once, then default to catalogue search
+        urgency_data["attempts"] += 1
+        send_whatsapp(
+            incoming_number,
+            "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
+        )
+        return jsonify({"status": "ok"}), 200
+
     # 6.5 CONFIRMING → customer confirming or correcting their queued request
     conv = conversations.get(incoming_number)
     if conv and conv.get("confirming"):
@@ -1453,11 +1628,15 @@ def _webhook_handler():
             queue = list(conv["request_queue"])
             conv["request_queue"] = []
 
-            threading.Thread(
-                target=_send_owner_briefing,
-                args=(incoming_number, incoming_message, queue),
-                daemon=True,
-            ).start()
+            pending_urgency[incoming_number] = {
+                "queue":       queue,
+                "raw_message": incoming_message,
+                "attempts":    0,
+            }
+            send_whatsapp(
+                incoming_number,
+                "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
+            )
             return jsonify({"status": "ok"}), 200
 
         else:
@@ -1807,6 +1986,7 @@ def health():
 
 threading.Thread(target=_send_startup_notification_once, daemon=True).start()
 threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
+_load_catalogue_index()
 
 
 if __name__ == "__main__":
