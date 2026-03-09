@@ -261,6 +261,12 @@ body {
   background: var(--accent-dim2);
 }
 
+.dist-chip.active {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+
 /* ── RESULTS AREA ── */
 .results-meta {
   padding: 12px 20px 8px;
@@ -569,6 +575,11 @@ body {
     <!-- Makes populated by JS -->
   </div>
 
+  <div class="filters" id="dist-filters-row">
+    <button class="filter-chip dist-chip active" data-dist="all" onclick="setDistributor('all', this)">Todos</button>
+    <!-- Distributors populated by JS -->
+  </div>
+
   <div id="results-meta" class="results-meta" style="display:none"></div>
 
   <div id="results-container"></div>
@@ -594,6 +605,7 @@ const INDEX_URL = "/catalogue_index.json?key=" + new URLSearchParams(window.loca
 let allParts = [];
 let filteredParts = [];
 let activeMake = "all";
+let activeDistributor = "all";
 let currentPage = 0;
 const PAGE_SIZE = 20;
 let searchTimer = null;
@@ -664,6 +676,18 @@ function initUI() {
     filtersRow.appendChild(btn);
   });
 
+  // Build distributors filter
+  const distributors = [...new Set(allParts.map(p => p.distributor).filter(Boolean))].sort();
+  const distFiltersRow = document.getElementById("dist-filters-row");
+  distributors.forEach(dist => {
+    const btn = document.createElement("button");
+    btn.className = "filter-chip dist-chip";
+    btn.dataset.dist = dist;
+    btn.textContent = dist;
+    btn.onclick = () => setDistributor(dist, btn);
+    distFiltersRow.appendChild(btn);
+  });
+
   // Stats bar
   if (allParts.length > 0) {
     const distributors = [...new Set(allParts.map(p => p.distributor))];
@@ -706,7 +730,15 @@ function clearSearch() {
 
 function setMake(make, btn) {
   activeMake = make;
-  document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+  document.querySelectorAll("[data-make]").forEach(c => c.classList.remove("active"));
+  btn.classList.add("active");
+  const query = document.getElementById("search-input").value;
+  doSearch(query);
+}
+
+function setDistributor(dist, btn) {
+  activeDistributor = dist;
+  document.querySelectorAll("[data-dist]").forEach(c => c.classList.remove("active"));
   btn.classList.add("active");
   const query = document.getElementById("search-input").value;
   doSearch(query);
@@ -719,6 +751,8 @@ function doSearch(query) {
   filteredParts = allParts.filter(part => {
     const makeMatch = activeMake === "all" || part.make === activeMake;
     if (!makeMatch) return false;
+    const distMatch = activeDistributor === "all" || part.distributor === activeDistributor;
+    if (!distMatch) return false;
     if (!q) return true;
 
     const searchable = [
@@ -758,7 +792,7 @@ function renderResults() {
   const loadMoreWrap = document.getElementById("load-more-wrap");
   const query = document.getElementById("search-input").value.trim();
 
-  if (!query && activeMake === "all") {
+  if (!query && activeMake === "all" && activeDistributor === "all") {
     renderInitialState();
     return;
   }

@@ -94,6 +94,20 @@ MAKES = [
 
 MAKES_PATTERN = re.compile(r'\b(' + '|'.join(MAKES) + r')\b', re.IGNORECASE)
 
+MAKE_NORMALIZE = {
+    "TOYOTA": "Toyota", "NISSAN": "Nissan", "MITSUBISHI": "Mitsubishi",
+    "HONDA": "Honda", "HYUNDAI": "Hyundai", "KIA": "Kia",
+    "MAZDA": "Mazda", "SUZUKI": "Suzuki", "ISUZU": "Isuzu",
+    "DAIHATSU": "Daihatsu", "FORD": "Ford", "CHEVROLET": "Chevrolet",
+    "MAZADA": "Mazda", "VIGO": "Toyota", "REVO": "Toyota",
+    "HILUX": "Toyota", "LANCER": "Mitsubishi", "PAJERO": "Mitsubishi",
+    "L200": "Mitsubishi", "PATROL": "Nissan", "FRONTIER": "Nissan",
+    "COROLLA": "Toyota", "YARIS": "Toyota", "CAMRY": "Toyota",
+    "FORTUNER": "Toyota", "LAND CRUISER": "Toyota",
+    "ACCENT": "Hyundai", "ELANTRA": "Hyundai", "TUCSON": "Hyundai",
+    "SPORTAGE": "Kia", "CERATO": "Kia"
+}
+
 # Within-cell space fix: "B/. 2 .50" → "B/. 2.50", "B/. 1 3,95" → "B/. 13,95"
 # Covers: digit-space-decimal  AND  digit-space-digits-decimal
 _PRICE_SPACE_FIX = re.compile(r'(\d)\s+(\d*[.,]\d{2,3})')
@@ -207,7 +221,8 @@ def parse_row_to_part(row: list[str], page: int, distributor: str) -> dict | Non
     # Make detection
     make_match = MAKES_PATTERN.search(combined)
     if make_match:
-        part["make"] = make_match.group(1).title()
+        raw_make = make_match.group(1)
+        part["make"] = MAKE_NORMALIZE.get(raw_make.upper(), raw_make.title())
 
     # Year range
     years = YEAR_PATTERN.findall(combined)
@@ -271,7 +286,8 @@ def parse_text_lines(pages: list[dict], distributor: str) -> list[dict]:
 
             make_match = MAKES_PATTERN.search(line)
             if make_match:
-                part["make"] = make_match.group(1).title()
+                raw_make = make_match.group(1)
+                part["make"] = MAKE_NORMALIZE.get(raw_make.upper(), raw_make.title())
 
             years = YEAR_PATTERN.findall(line)
             if len(years) >= 2:
