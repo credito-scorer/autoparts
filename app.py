@@ -1371,6 +1371,22 @@ def _webhook_handler():
                 f"Pieza: {part_str}\n"
                 f"Notas: {result.get('notes', '—')}"
             )
+        else:
+            # No pending query — acknowledge seller and forward to owner
+            seller_name = get_seller_name(incoming_number)
+            send_whatsapp(
+                incoming_number,
+                f"Hola {seller_name} 👋 Recibido. El equipo de Zeli revisará tu mensaje en breve."
+            )
+            fwd_sid = send_whatsapp(
+                owner_number,
+                f"📩 *Mensaje de proveedor*\n"
+                f"De: {seller_name} ({incoming_number})\n"
+                f"Mensaje: \"{incoming_message}\"\n"
+                f"↩️ Responde aquí para hablarle directamente."
+            )
+            if fwd_sid:
+                escalation_message_map[fwd_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
     # 3. LOCAL STORE → forward message to owner, never treat as customer
