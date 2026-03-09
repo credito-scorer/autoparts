@@ -967,6 +967,25 @@ def _handle_image_relay(message: dict) -> None:
             )
         return
 
+    # ── SELLER → forward image to owner (no live session) ───────────────────
+    if is_seller(incoming_number):
+        seller_name = get_seller_name(incoming_number)
+        label = f"📩 *Imagen de proveedor — {seller_name} ({incoming_number})*"
+        if caption:
+            label += f"\n_{caption}_"
+        print(f"📸 Seller→owner image relay from {incoming_number}")
+        try:
+            img_bytes, _ = download_meta_media(media_id)
+            new_id = upload_meta_media(img_bytes, mime_type)
+            msg_sid = send_whatsapp_image(owner_number, new_id, label)
+            if msg_sid:
+                escalation_message_map[msg_sid] = incoming_number
+                print(f"📸 Seller image relayed → owner (sid={msg_sid})")
+        except Exception as e:
+            _tb.print_exc()
+            print(f"❌ Image relay seller→owner failed: {e}")
+        return
+
     # ── CUSTOMER → forward image to owner ──────────────────────────────────
     label = f"📸 *Imagen de cliente {incoming_number}*"
     if caption:
@@ -1089,10 +1108,12 @@ def _webhook_handler():
             if msg_sid:
                 seller_message_map[msg_sid] = incoming_number
         else:
-            send_whatsapp(
-                incoming_number,
-                f"Hola {seller_name} 👋 Recibido. El equipo de Zeli revisará tu mensaje en breve."
-            )
+            already_pending = incoming_number in escalation_message_map.values()
+            if not already_pending:
+                send_whatsapp(
+                    incoming_number,
+                    f"Hola {seller_name} 👋 Recibido. El equipo de Zeli revisará tu mensaje en breve."
+                )
             fwd_sid = send_whatsapp(
                 owner_number,
                 f"📩 *Mensaje de proveedor*\n"
