@@ -1090,14 +1090,23 @@ def _webhook_handler():
                 seller_message_map[msg_sid] = incoming_number
         else:
             send_whatsapp(
-                owner_number,
-                f"📦 *{seller_name} te escribió:* {incoming_message}\n\n"
-                f"Responde con SELLER, {seller_name}, [tu mensaje] para iniciar sesión."
+                incoming_number,
+                f"Hola {seller_name} 👋 Recibido. El equipo de Zeli revisará tu mensaje en breve."
             )
+            fwd_sid = send_whatsapp(
+                owner_number,
+                f"📩 *Mensaje de proveedor*\n"
+                f"De: {seller_name} ({incoming_number})\n"
+                f"Mensaje: \"{incoming_message}\"\n"
+                f"↩️ Responde aquí para hablarle directamente."
+            )
+            if fwd_sid:
+                escalation_message_map[fwd_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
     # 1. OWNER → Approval or reply-forwarding flow
     if incoming_normalized == owner_number.replace("+", ""):
+        print(f"🔍 Owner reply — replied_to_sid: {replied_to_sid}")
         # Reply to a store message → route back to store
         if replied_to_sid:
             with store_message_map_lock:
@@ -1265,6 +1274,15 @@ def _webhook_handler():
             with _state_lock:
                 customer_number = escalation_message_map.get(replied_to_sid)
         if customer_number:
+
+            # Seller forward — reply directly, no live session, no Zeli branding
+            if is_seller(customer_number):
+                send_whatsapp(customer_number, incoming_message)
+                with _state_lock:
+                    escalation_message_map.pop(replied_to_sid, None)
+                print(f"📤 Forwarded owner reply to seller {customer_number}: {incoming_message}")
+                send_whatsapp(owner_number, "✅ Mensaje enviado al proveedor.")
+                return jsonify({"status": "ok"}), 200
 
             if incoming_message.strip().lower() == "fin":
                 with _state_lock:
