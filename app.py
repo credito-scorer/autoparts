@@ -61,7 +61,9 @@ pending_quotes         = {}   # customer_number → {description, price, lead_ti
 pending_urgency        = {}   # customer_number → {queue, raw_message, attempts}
 live_sessions          = {}
 pending_live_offers    = {}
-seller_sessions        = {}
+seller_sessions           = {}
+active_seller_sessions    = set()   # seller numbers with an active forward in progress
+active_seller_sessions_ts = {}      # seller_number → last_activity epoch (float)
 
 # In-memory catalogue search index — loaded once at startup
 CATALOGUE_INDEX: list = []
@@ -1108,12 +1110,19 @@ def _webhook_handler():
             if msg_sid:
                 seller_message_map[msg_sid] = incoming_number
         else:
-            already_pending = incoming_number in escalation_message_map.values()
-            if not already_pending:
+            _now = time.time()
+            # Expire stale sessions (> 2 hours of inactivity)
+            _expired = [n for n, ts in active_seller_sessions_ts.items() if _now - ts > 7200]
+            for _n in _expired:
+                active_seller_sessions.discard(_n)
+                active_seller_sessions_ts.pop(_n, None)
+            if incoming_number not in active_seller_sessions:
                 send_whatsapp(
                     incoming_number,
                     f"Hola {seller_name} 👋 Recibido. El equipo de Zeli revisará tu mensaje en breve."
                 )
+                active_seller_sessions.add(incoming_number)
+            active_seller_sessions_ts[incoming_number] = _now
             fwd_sid = send_whatsapp(
                 owner_number,
                 f"📩 *Mensaje de proveedor*\n"
@@ -1301,6 +1310,10 @@ def _webhook_handler():
                 send_whatsapp(customer_number, incoming_message)
                 with _state_lock:
                     escalation_message_map.pop(replied_to_sid, None)
+                _closing = {"gracias", "listo", "ok gracias", "hasta luego", "bye"}
+                if incoming_message.strip().lower() in _closing:
+                    active_seller_sessions.discard(customer_number)
+                    active_seller_sessions_ts.pop(customer_number, None)
                 print(f"📤 Forwarded owner reply to seller {customer_number}: {incoming_message}")
                 send_whatsapp(owner_number, "✅ Mensaje enviado al proveedor.")
                 return jsonify({"status": "ok"}), 200
