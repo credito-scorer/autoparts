@@ -94,6 +94,20 @@ MAKES = [
 
 MAKES_PATTERN = re.compile(r'\b(' + '|'.join(MAKES) + r')\b', re.IGNORECASE)
 
+# Within-cell space fix: "B/. 2 .50" → "B/. 2.50", "B/. 1 3,95" → "B/. 13,95"
+# Covers: digit-space-decimal  AND  digit-space-digits-decimal
+_PRICE_SPACE_FIX = re.compile(r'(\d)\s+(\d*[.,]\d{2,3})')
+
+# Cross-cell split: next cell looks like the continuation of a broken price
+# e.g. cell="$ 1"  next="3,95"  →  13.95
+_PRICE_CONTINUATION = re.compile(r'^\d{2,3}$|^\d{1,3}[.,]\d{2}$')
+
+# Parts where a sub-$2 price is almost certainly a parse error
+_COMPLEX_PARTS = {
+    "sensor", "alternador", "alternator", "master", "kit",
+    "bomba", "pump", "compresor", "compressor",
+}
+
 
 def parse_row_to_part(row: list[str], page: int, distributor: str) -> dict | None:
     """
@@ -128,16 +142,57 @@ def parse_row_to_part(row: list[str], page: int, distributor: str) -> dict | Non
         "updated_at": datetime.now().isoformat()
     }
 
-    # Try to find price — usually last numeric column
-    for cell in reversed(row):
-        price_match = PRICE_PATTERN.search(cell)
+    # Try to find price — usually last numeric column.
+    # PDFs sometimes split a price across adjacent cells, e.g. "$ 1" | "3,95" → 13.95.
+    # When the matched group is a plain integer (no decimal yet) and the next cell in
+    # the reversed scan matches _PRICE_CONTINUATION, concatenate before parsing.
+    reversed_row = list(reversed(row))
+    for i, cell in enumerate(reversed_row):
+        # Collapse internal spaces in the price value before matching:
+        # "B/. 2 .50" → "B/. 2.50"   "B/. 1 3,95" → "B/. 13,95"
+        normalized = _PRICE_SPACE_FIX.sub(r'\1\2', cell)
+        price_match = PRICE_PATTERN.search(normalized)
         if price_match:
-            price_str = price_match.group(1).replace(",", ".")
+            raw_group = price_match.group(1)            # e.g. "1" or "13,95"
+            price_str = raw_group.replace(",", ".")
             try:
-                part["price"] = float(price_str)
-                break
+                candidate = float(price_str)
             except ValueError:
                 continue
+
+            # Cross-cell split fallback: cell="$ 1", next cell="3,95" → 13.95
+            # Only fires when the matched group is a bare integer (no decimal yet)
+            if "." not in raw_group and "," not in raw_group:
+                nxt = reversed_row[i + 1].strip() if i + 1 < len(reversed_row) else ""
+                if nxt and _PRICE_CONTINUATION.match(nxt):
+                    try:
+                        candidate = float(price_str + nxt.replace(",", "."))
+                    except ValueError:
+                        pass                    # keep original candidate on failure
+
+            part["price"] = candidate
+            break
+
+    # Sanity check: a sub-$2 price on a complex part almost certainly means the
+    # split-price fix above didn't fire (e.g. no $ sign in the cell, different layout).
+    # Re-scan left-to-right for any adjacent pair that produces a plausible price.
+    if part["price"] is not None and part["price"] < 2.0:
+        desc_lower = (part["description"] or combined).lower()
+        if any(kw in desc_lower for kw in _COMPLEX_PARTS):
+            print(f"  ⚠️  Suspicious price ${part['price']:.2f} — attempting concat fix")
+            for j in range(len(row) - 1):
+                m = PRICE_PATTERN.search(row[j])
+                nxt = row[j + 1].strip()
+                if m and nxt and _PRICE_CONTINUATION.match(nxt):
+                    raw = m.group(1)
+                    if "." not in raw and "," not in raw:
+                        try:
+                            fixed = float(raw + nxt.replace(",", "."))
+                            if fixed >= 2.0:
+                                part["price"] = fixed
+                                break
+                        except ValueError:
+                            continue
 
     # Description — usually longest text cell
     text_cells = [c for c in row if c and len(c) > 8 and not PRICE_PATTERN.fullmatch(c.strip())]
