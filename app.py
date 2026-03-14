@@ -6,7 +6,7 @@ import hmac
 import hashlib
 import threading
 from enum import Enum
-from flask import Flask, request, jsonify, make_response, redirect
+from flask import Flask, request, jsonify, make_response, redirect, send_from_directory
 from dotenv import load_dotenv
 from agent.parser import (
     parse_request_multi, extract_partial, extract_vehicle_for_part,
@@ -2055,6 +2055,11 @@ def health():
 threading.Thread(target=_send_startup_notification_once, daemon=True).start()
 threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
 _load_catalogue_index()
+
+
+@app.route("/intel")
+def intel_dashboard():
+    return send_from_directory("static", "intel.html")
 
 
 if __name__ == "__main__":
