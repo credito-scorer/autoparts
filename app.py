@@ -154,6 +154,7 @@ def _new_conversation() -> dict:
         "dead_end_count":        0,
         "same_field_count":      0,
         "last_missing_field":    None,
+        "last_message":          "",
         "last_seen":             time.time(),
     }
 
@@ -202,6 +203,23 @@ def _cleanup_loop() -> None:
                     )
                 except Exception:
                     pass
+        for n, conv in expired:
+            queue = conv.get("request_queue", [])
+            if not queue:
+                continue
+            req = queue[0]
+            last_state = "abandoned"
+            if conv.get("confirming"):
+                last_state = "abandoned_at_confirmation"
+            elif conv.get("asking_shared_vehicle") or conv.get("asking_per_item"):
+                last_state = "abandoned_at_clarification"
+            log_request({
+                "customer_number": n,
+                "raw_message":     conv.get("last_message", ""),
+                "parsed":          req,
+                "status":          last_state,
+                "owner_notes":     f"Abandoned after {len(queue)} item(s) in queue",
+            })
         if expired:
             print(f"🧹 Cleaned up {len(expired)} stale conversation(s)")
 
@@ -276,6 +294,7 @@ def _enqueue_requests(conv: dict, new_requests: list, number: str = "", message:
             "parsed":          item,
             "status":          "intake",
         })
+    conv["last_message"] = message
     conv["last_seen"] = time.time()
 
 
@@ -793,6 +812,7 @@ def process_customer_request(number: str, message: str) -> None:
                 if not _req_complete(entry):
                     print(f"📝 Updated queue entry: {entry}")
                     break
+            conv["last_message"]       = message
             conv["last_seen"]          = time.time()
             conv["dead_end_count"]     = 0
             conv["same_field_count"]   = 0
@@ -813,6 +833,7 @@ def process_customer_request(number: str, message: str) -> None:
             for item in queue:
                 if not item.get("make") and item.get("model"):
                     resolve_make_model(item, message)
+            conv["last_message"]       = message
             conv["last_seen"]          = time.time()
             conv["dead_end_count"]     = 0
             conv["same_field_count"]   = 0
@@ -860,8 +881,9 @@ def process_customer_request(number: str, message: str) -> None:
 
     # ── Check if all queue items are complete ──────────────────────────────────
     if _queue_all_complete(conv["request_queue"]):
-        conv["confirming"] = True
-        conv["last_seen"]  = time.time()
+        conv["confirming"]    = True
+        conv["last_message"]  = message
+        conv["last_seen"]     = time.time()
         send_whatsapp(number, generate_queue_confirmation(conv["request_queue"]))
     elif (
         len(conv["request_queue"]) >= 2
