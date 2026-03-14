@@ -785,7 +785,17 @@ async function runIntel() {
     document.getElementById(`result-${t.id}`).innerHTML = '';
   });
 
-  await Promise.allSettled(TRACKS.map(t => runTrack(t)));
+  async function runBatched(tracks, batchSize, delayMs) {
+    for (let i = 0; i < tracks.length; i += batchSize) {
+      const batch = tracks.slice(i, i + batchSize);
+      await Promise.allSettled(batch.map(t => runTrack(t)));
+      if (i + batchSize < tracks.length) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  await runBatched(TRACKS, 2, 3000);
 }
 
 renderTracks();
