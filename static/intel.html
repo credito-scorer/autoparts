@@ -633,10 +633,10 @@ async function callClaude(systemPrompt, userPrompt) {
 
 function parseStandard(text) {
   return {
-    findings: text.match(/FINDINGS:\s*([\s\S]*?)(?=ZELI_INSIGHT:|$)/)?.[1]?.trim() || text,
-    insight:  text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '',
+    findings: (text.match(/FINDINGS:\s*([\s\S]*?)(?=ZELI_INSIGHT:|$)/)?.[1]?.trim() || text).replace(/\*\*/g, ''),
+    insight:  (text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '').replace(/\*\*/g, ''),
     urgency:  text.match(/URGENCY:\s*(HIGH|MEDIUM|LOW)/)?.[1] || 'MEDIUM',
-    reason:   text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || ''
+    reason:   (text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || '').replace(/\*\*/g, '')
   };
 }
 
@@ -650,10 +650,10 @@ function parseVerticals(text) {
     }
   }
   return {
-    findings: text.match(/FINDINGS:\s*([\s\S]*?)(?=VERTICAL_1:|$)/)?.[1]?.trim() || '',
-    insight:  text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '',
+    findings: (text.match(/FINDINGS:\s*([\s\S]*?)(?=VERTICAL_1:|$)/)?.[1]?.trim() || '').replace(/\*\*/g, ''),
+    insight:  (text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '').replace(/\*\*/g, ''),
     urgency:  'EXPLORE',
-    reason:   text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || '',
+    reason:   (text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || '').replace(/\*\*/g, ''),
     verticals
   };
 }
@@ -795,7 +795,7 @@ async function runIntel() {
     }
   }
 
-  await runBatched(TRACKS, 1, 5000);
+  await runBatched(TRACKS, 1, 15000);
 }
 
 renderTracks();
