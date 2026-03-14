@@ -2062,6 +2062,24 @@ def intel_dashboard():
     return send_from_directory("static", "intel.html")
 
 
+@app.route("/api/claude", methods=["POST"])
+def claude_proxy():
+    import requests as req
+    data = request.get_json()
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": os.getenv("ANTHROPIC_API_KEY"),
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "web-search-2025-03-05"
+    }
+    resp = req.post(
+        "https://api.anthropic.com/v1/messages",
+        json=data,
+        headers=headers
+    )
+    return resp.json(), resp.status_code
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(debug=True, port=port)
