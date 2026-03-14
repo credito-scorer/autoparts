@@ -911,6 +911,14 @@ def _normalize_number(n: str) -> str:
     return n.replace("whatsapp:", "").replace("+", "").replace(" ", "").replace("-", "").strip()
 
 
+def is_customer_beta(number: str) -> bool:
+    raw = os.getenv("CUSTOMER_BETA_NUMBERS", "")
+    if not raw:
+        return False
+    whitelist = {_normalize_number(n.strip()) for n in raw.split(",") if n.strip()}
+    return _normalize_number(number) in whitelist
+
+
 def _handle_image_relay(message: dict) -> None:
     """Relay image messages bidirectionally between customers/stores and the owner."""
     import traceback as _tb
@@ -1161,6 +1169,40 @@ def _webhook_handler():
             )
             if fwd_sid:
                 escalation_message_map[fwd_sid] = incoming_number
+        return jsonify({"status": "ok"}), 200
+
+    # 1.6 CUSTOMER BETA → whitelist-gated live relay to owner
+    if is_customer_beta(incoming_number):
+        with _state_lock:
+            already_live = incoming_number in live_sessions
+            live_sessions[incoming_number] = True
+        if not already_live:
+            send_whatsapp(
+                incoming_number,
+                "👋 Hola! Somos *Zeli*.\n\n"
+                "Encuentra cualquier repuesto sin salir de tu taller. "
+                "Dinos qué pieza necesitas. 🔩"
+            )
+            if owner_number:
+                msg_sid = send_whatsapp(
+                    owner_number,
+                    f"🔴 *Cliente beta activo*\n"
+                    f"Número: {incoming_number}\n"
+                    f"Mensaje: \"{incoming_message}\"\n\n"
+                    f"_Responde aquí para hablarle directamente._"
+                )
+                if msg_sid:
+                    with _state_lock:
+                        escalation_message_map[msg_sid] = incoming_number
+        else:
+            if owner_number:
+                msg_sid = send_whatsapp(
+                    owner_number,
+                    f"💬 *{incoming_number}:*\n{incoming_message}"
+                )
+                if msg_sid:
+                    with _state_lock:
+                        escalation_message_map[msg_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
     # 1. OWNER → Approval or reply-forwarding flow
