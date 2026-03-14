@@ -615,20 +615,30 @@ function renderTracks() {
 }
 
 async function callClaude(systemPrompt, userPrompt) {
-  const res = await fetch('/api/claude', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
-    })
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  const payload = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 800,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }]
+  };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 20000 * attempt));
+    const res = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (res.status === 429) continue;
+      throw new Error(err?.error?.message || res.statusText);
+    }
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  }
+  throw new Error('Rate limit exceeded after retries');
 }
 
 function parseStandard(text) {

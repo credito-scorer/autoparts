@@ -2065,7 +2065,6 @@ def intel_dashboard():
 @app.route("/api/claude", methods=["POST"])
 def claude_proxy():
     import requests as req
-    import time
     data = request.get_json()
     headers = {
         "Content-Type": "application/json",
@@ -2073,19 +2072,13 @@ def claude_proxy():
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "web-search-2025-03-05"
     }
-    for attempt in range(5):
-        resp = req.post(
-            "https://api.anthropic.com/v1/messages",
-            json=data,
-            headers=headers,
-            timeout=120
-        )
-        if resp.status_code == 429:
-            wait = 30 * (attempt + 1)
-            time.sleep(wait)
-            continue
-        return resp.json(), resp.status_code
-    return {"error": {"message": "Rate limit exceeded after retries"}}, 429
+    resp = req.post(
+        "https://api.anthropic.com/v1/messages",
+        json=data,
+        headers=headers,
+        timeout=120
+    )
+    return resp.json(), resp.status_code
 
 
 if __name__ == "__main__":
