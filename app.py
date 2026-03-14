@@ -1692,6 +1692,11 @@ def _webhook_handler():
 
         if affirmative:
             conv["confirming"] = False
+            _send_owner_briefing(
+                incoming_number,
+                incoming_message,
+                conv["request_queue"]
+            )
             conv["state"]      = ConversationState.WAITING
             queue = list(conv["request_queue"])
             conv["request_queue"] = []
