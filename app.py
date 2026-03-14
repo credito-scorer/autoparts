@@ -2057,6 +2057,11 @@ threading.Thread(target=monitor._daily_summary_loop, daemon=True).start()
 _load_catalogue_index()
 
 
+@app.route("/")
+def hub():
+    return send_from_directory("static", "hub.html")
+
+
 @app.route("/intel")
 def intel_dashboard():
     return send_from_directory("static", "intel.html")

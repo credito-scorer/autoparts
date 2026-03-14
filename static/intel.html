@@ -436,9 +436,50 @@
     body { padding: 24px 16px; }
     .vertical-meta { grid-template-columns: 1fr; }
   }
+.zeli-nav {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.zeli-nav-logo {
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 16px 0;
+  margin-right: 24px;
+}
+.zeli-nav-link {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 16px 14px;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.zeli-nav-link:hover { color: var(--text); }
+.zeli-nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
 </style>
 </head>
 <body>
+
+<nav class="zeli-nav">
+  <a class="zeli-nav-logo" href="/">Zeli</a>
+  <a class="zeli-nav-link" href="/dashboard?key=autoparts0" id="nav-dashboard">Dashboard</a>
+  <a class="zeli-nav-link" href="/intel" id="nav-intel">Intel</a>
+  <a class="zeli-nav-link" href="/search?key=autoparts0" id="nav-search">Catalogue</a>
+</nav>
 
 <!-- LOGIN SCREEN -->
 <div class="login-wrap" id="loginScreen">
@@ -809,6 +850,13 @@ async function runIntel() {
 }
 
 renderTracks();
+
+(function() {
+  const path = window.location.pathname;
+  if (path.includes('dashboard')) document.getElementById('nav-dashboard').classList.add('active');
+  else if (path.includes('intel')) document.getElementById('nav-intel').classList.add('active');
+  else if (path.includes('search')) document.getElementById('nav-search').classList.add('active');
+})();
 </script>
 </body>
 </html>
