@@ -1978,8 +1978,8 @@ def catalogue_index_json():
         return make_response(_json.load(f), 200)
 
 
-@app.route("/", methods=["GET"])
-def index():
+@app.route("/login", methods=["GET"])
+def login_page():
     failed = request.args.get("failed")
     html = f"""<!DOCTYPE html>
 <html lang="es">
