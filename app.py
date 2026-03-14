@@ -262,7 +262,7 @@ def _vehicle_str(queue: list) -> str:
     return ""
 
 
-def _enqueue_requests(conv: dict, new_requests: list) -> None:
+def _enqueue_requests(conv: dict, new_requests: list, number: str = "", message: str = "") -> None:
     """Append new parsed requests to the conversation queue."""
     for new_req in new_requests:
         item = {k: str(new_req.get(k) or "").strip() for k in ("part", "make", "model", "year")}
@@ -270,6 +270,12 @@ def _enqueue_requests(conv: dict, new_requests: list) -> None:
             if new_req.get(meta):
                 item[meta] = new_req[meta]
         conv["request_queue"].append(item)
+        log_request({
+            "customer_number": number,
+            "raw_message":     message,
+            "parsed":          item,
+            "status":          "intake",
+        })
     conv["last_seen"] = time.time()
 
 
@@ -705,7 +711,8 @@ def process_customer_request(number: str, message: str) -> None:
                 if vehicle:
                     _enqueue_requests(conv, [{"part": None, "make": vehicle.get("make"),
                                               "model": vehicle.get("model"),
-                                              "year": vehicle.get("year")}])
+                                              "year": vehicle.get("year")}],
+                                     incoming_number, incoming_message)
                     break
             send_whatsapp(
                 number,
@@ -791,7 +798,7 @@ def process_customer_request(number: str, message: str) -> None:
             conv["same_field_count"]   = 0
             conv["last_missing_field"] = None
         else:
-            _enqueue_requests(conv, new_requests)
+            _enqueue_requests(conv, new_requests, incoming_number, incoming_message)
             conv["dead_end_count"]     = 0
             conv["same_field_count"]   = 0
             conv["last_missing_field"] = None
