@@ -217,11 +217,16 @@ GOODBYE_COMPLETED = "Con gusto, aquí estamos cuando nos necesites. 👋"
 GOODBYE_MID_FLOW  = "Claro, cuando necesites una pieza aquí estamos. 👋"
 
 
+def _resolved_part(req: dict) -> str:
+    """Return Luis's canonical part name if available, else the raw parsed part."""
+    return (req.get("luis") or {}).get("part_identified") or req.get("part") or "?"
+
+
 def generate_queue_confirmation(requests: list) -> str:
     """Generate a confirmation summary for one or more queued requests."""
     if len(requests) == 1:
-        req = requests[0]
-        part  = req.get("part", "?")
+        req   = requests[0]
+        part  = _resolved_part(req)
         make  = req.get("make", "?")
         model = req.get("model", "?")
         year  = req.get("year", "?")
@@ -234,7 +239,7 @@ def generate_queue_confirmation(requests: list) -> str:
         )
     else:
         lines = "\n".join(
-            f"🔩 {r.get('part')} — {r.get('make')} {r.get('model')} {r.get('year')}"
+            f"🔩 {_resolved_part(r)} — {r.get('make')} {r.get('model')} {r.get('year')}"
             for r in requests
         )
         instruction = (
@@ -258,11 +263,11 @@ def generate_queue_confirmation(requests: list) -> str:
         if len(requests) == 1:
             req = requests[0]
             return (
-                f"🔩 {req.get('part')} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}\n\n"
+                f"🔩 {_resolved_part(req)} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}\n\n"
                 f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
             )
         lines = "\n".join(
-            f"🔩 {r.get('part')} — {r.get('make')} {r.get('model')} {r.get('year')}"
+            f"🔩 {_resolved_part(r)} — {r.get('make')} {r.get('model')} {r.get('year')}"
             for r in requests
         )
         return (

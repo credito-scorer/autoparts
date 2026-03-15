@@ -151,6 +151,8 @@ def _new_conversation() -> dict:
         "confirming":            False,
         "asking_shared_vehicle": False,
         "asking_per_item":       False,
+        "clarifying":             False,
+        "clarification_context":  None,
         "current_item_index":    0,
         "dead_end_count":        0,
         "same_field_count":      0,
@@ -212,6 +214,8 @@ def _cleanup_loop() -> None:
             last_state = "abandoned"
             if conv.get("confirming"):
                 last_state = "abandoned_at_confirmation"
+            elif conv.get("clarifying"):
+                last_state = "abandoned_at_clarification"
             elif conv.get("asking_shared_vehicle") or conv.get("asking_per_item"):
                 last_state = "abandoned_at_clarification"
             log_request({
@@ -556,6 +560,24 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
         )
         confidence_label = _CONFIDENCE_LABELS.get(req.get("confidence", ""), "—")
 
+        # ── Luis block (appended after parser if Luis data is present) ──────
+        _luis = req.get("luis")
+        _luis_block = ""
+        if _luis:
+            _luis_lines = ["🧠 Luis:"]
+            _cqs = _luis.get("clarifying_questions") or []
+            if _cqs:
+                _luis_lines.append(f"  Tipo: {' / '.join(_cqs)}")
+            _brands = ", ".join(_luis.get("brand_recommendations") or []) or "—"
+            _luis_lines.append(f"  Marcas recomendadas: {_brands}")
+            _luis_lines.append(f"  Confianza parser: {confidence_label}")
+            _luis_lines.append(f"  Confianza sourcing: {_luis.get('confidence') or '—'}")
+            _ruta = f"{_luis.get('sourcing_path') or '—'} — {_luis.get('lead_time') or '—'}"
+            _luis_lines.append(f"  Ruta: {_ruta}")
+            if _luis.get("ronel_flag") and _luis.get("ronel_note"):
+                _luis_lines.append(f"  ⚠️ {_luis['ronel_note']}")
+            _luis_block = "\n".join(_luis_lines) + "\n\n"
+
         briefing = (
             f"🔩 *Nueva solicitud*\n\n"
             f"👤 Cliente: {number}\n"
@@ -567,6 +589,7 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
             f"  Año: {req.get('year') or '—'}\n"
             f"  Resolución: {resolution_label}\n"
             f"  Confianza: {confidence_label}\n\n"
+            f"{_luis_block}"
             f"↩️ Responde con:\n"
             f"QUOTE | precio | entrega | descripción\n"
             f"NOFOUND | razón\n"
@@ -882,35 +905,58 @@ def process_customer_request(number: str, message: str) -> None:
 
     # ── Check if all queue items are complete ──────────────────────────────────
     if _queue_all_complete(conv["request_queue"]):
-        conv["confirming"]    = True
-        conv["last_message"]  = message
-        conv["last_seen"]     = time.time()
+        conv["last_message"] = message
+        conv["last_seen"]    = time.time()
 
-        # ── Luis intelligence layer ────────────────────────────────────────────
-        _customer_msg = None
         _first_req = conv["request_queue"][0] if conv["request_queue"] else None
+        _luis = None
         if _first_req and _first_req.get("part"):
             try:
                 _luis = consult_luis(_first_req, message)
-                if _luis and _luis.get("zeli_message"):
-                    _customer_msg = _luis["zeli_message"]
-                if _luis and _luis.get("ronel_flag") and _luis.get("ronel_note"):
-                    _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
-                    if _owner:
-                        _part_info = (
-                            f"{_first_req.get('part')} — "
-                            f"{_first_req.get('make')} {_first_req.get('model')} "
-                            f"{_first_req.get('year')}"
-                        )
-                        send_whatsapp(
-                            _owner,
-                            f"⚠️ *Luis flag — revisar*\n\n{_luis['ronel_note']}\n\n"
-                            f"Cliente: {number}\nPieza: {_part_info}",
-                        )
             except Exception as _e:
                 print(f"⚠️ Luis integration error: {_e}")
 
-        send_whatsapp(number, _customer_msg or generate_queue_confirmation(conv["request_queue"]))
+        if _luis and _luis.get("needs_clarification") and _luis.get("zeli_message"):
+            # ── Enter clarifying state — do NOT set confirming yet ─────────────
+            conv["clarifying"] = True
+            conv["clarification_context"] = {
+                "raw_message":       message,
+                "parsed_req":        _first_req,
+                "answers":           [],
+                "initial_question":  _luis["zeli_message"],
+            }
+            send_whatsapp(number, _luis["zeli_message"])
+            if _luis.get("ronel_flag") and _luis.get("ronel_note"):
+                _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+                if _owner:
+                    _part_info = (
+                        f"{_first_req.get('part')} — "
+                        f"{_first_req.get('make')} {_first_req.get('model')} "
+                        f"{_first_req.get('year')}"
+                    )
+                    send_whatsapp(
+                        _owner,
+                        f"⚠️ *Luis flag — revisar*\n\n{_luis['ronel_note']}\n\n"
+                        f"Cliente: {number}\nPieza: {_part_info}",
+                    )
+        else:
+            # ── No clarification needed (or Luis failed) → straight to confirming ─
+            conv["confirming"] = True
+            _customer_msg = _luis.get("zeli_message") if _luis else None
+            if _luis and _luis.get("ronel_flag") and _luis.get("ronel_note"):
+                _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+                if _owner:
+                    _part_info = (
+                        f"{_first_req.get('part')} — "
+                        f"{_first_req.get('make')} {_first_req.get('model')} "
+                        f"{_first_req.get('year')}"
+                    )
+                    send_whatsapp(
+                        _owner,
+                        f"⚠️ *Luis flag — revisar*\n\n{_luis['ronel_note']}\n\n"
+                        f"Cliente: {number}\nPieza: {_part_info}",
+                    )
+            send_whatsapp(number, _customer_msg or generate_queue_confirmation(conv["request_queue"]))
     elif (
         len(conv["request_queue"]) >= 2
         and not conv.get("asking_shared_vehicle")
@@ -1368,6 +1414,8 @@ def _webhook_handler():
                         conv["confirming"]            = False
                         conv["asking_shared_vehicle"] = False
                         conv["asking_per_item"]       = False
+                        conv["clarifying"]            = False
+                        conv["clarification_context"] = None
                         conv["current_item_index"]    = 0
                         conv["dead_end_count"]        = 0
                         conv["same_field_count"]      = 0
@@ -1481,6 +1529,8 @@ def _webhook_handler():
                     conv["confirming"]            = False
                     conv["asking_shared_vehicle"] = False
                     conv["asking_per_item"]       = False
+                    conv["clarifying"]            = False
+                    conv["clarification_context"] = None
                     conv["current_item_index"]    = 0
                     conv["dead_end_count"]        = 0
                     conv["same_field_count"]      = 0
@@ -1780,6 +1830,61 @@ def _webhook_handler():
             incoming_number,
             "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
         )
+        return jsonify({"status": "ok"}), 200
+
+    # 6.4 CLARIFYING → customer answering Luis's clarifying questions
+    conv = conversations.get(incoming_number)
+    if conv and conv.get("clarifying"):
+        if is_goodbye(incoming_message):
+            _close_conversation(incoming_number, mid_flow=True)
+            return jsonify({"status": "ok"}), 200
+
+        ctx         = conv.get("clarification_context") or {}
+        parsed_req  = ctx.get("parsed_req")
+        answers     = list(ctx.get("answers", []))
+        answers.append(incoming_message)
+
+        _luis2 = None
+        if parsed_req:
+            try:
+                _history = [
+                    {"role": "zeli",     "content": ctx.get("initial_question", "")},
+                    {"role": "customer", "content": incoming_message},
+                ]
+                _luis2 = consult_luis(parsed_req, incoming_message, customer_history=_history)
+            except Exception as _e:
+                print(f"⚠️ Luis clarification round 2 error: {_e}")
+
+        # Allow at most one more round of clarification (len(answers) == 1 means first answer)
+        if _luis2 and _luis2.get("needs_clarification") and len(answers) < 2:
+            ctx["answers"] = answers
+            conv["clarification_context"] = ctx
+            send_whatsapp(
+                incoming_number,
+                _luis2.get("zeli_message") or "¿Puedes darme más detalles sobre la pieza?",
+            )
+        else:
+            # Done clarifying — move to confirming
+            conv["clarifying"]            = False
+            conv["clarification_context"] = None
+            conv["confirming"]            = True
+
+            if _luis2 and _luis2.get("ronel_flag") and _luis2.get("ronel_note"):
+                _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+                if _owner and parsed_req:
+                    _part_info = (
+                        f"{parsed_req.get('part')} — "
+                        f"{parsed_req.get('make')} {parsed_req.get('model')} "
+                        f"{parsed_req.get('year')}"
+                    )
+                    send_whatsapp(
+                        _owner,
+                        f"⚠️ *Luis flag — revisar*\n\n{_luis2['ronel_note']}\n\n"
+                        f"Cliente: {incoming_number}\nPieza: {_part_info}",
+                    )
+
+            send_whatsapp(incoming_number, generate_queue_confirmation(conv["request_queue"]))
+
         return jsonify({"status": "ok"}), 200
 
     # 6.5 CONFIRMING → customer confirming or correcting their queued request
