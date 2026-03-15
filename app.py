@@ -732,7 +732,7 @@ def process_customer_request(number: str, message: str) -> None:
                     _enqueue_requests(conv, [{"part": None, "make": vehicle.get("make"),
                                               "model": vehicle.get("model"),
                                               "year": vehicle.get("year")}],
-                                     incoming_number, incoming_message)
+                                     number, message)
                     break
             send_whatsapp(
                 number,
@@ -819,7 +819,7 @@ def process_customer_request(number: str, message: str) -> None:
             conv["same_field_count"]   = 0
             conv["last_missing_field"] = None
         else:
-            _enqueue_requests(conv, new_requests, incoming_number, incoming_message)
+            _enqueue_requests(conv, new_requests, number, message)
             conv["dead_end_count"]     = 0
             conv["same_field_count"]   = 0
             conv["last_missing_field"] = None
