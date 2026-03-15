@@ -226,6 +226,7 @@ def generate_queue_confirmation(requests: list) -> str:
     """Generate a confirmation summary for one or more queued requests."""
     if len(requests) == 1:
         req   = requests[0]
+        print(f"🐛 [generate_queue_confirmation] req keys={list(req.keys())} clarification_answers={req.get('clarification_answers')!r}")
         part  = _resolved_part(req)
         make  = req.get("make", "?")
         model = req.get("model", "?")

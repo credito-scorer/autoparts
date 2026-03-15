@@ -1885,6 +1885,8 @@ def _webhook_handler():
                         f"Cliente: {incoming_number}\nPieza: {_part_info}",
                     )
 
+            _dbg_req = conv["request_queue"][0] if conv["request_queue"] else {}
+            print(f"🐛 [6.4] queue[0] keys={list(_dbg_req.keys())} clarification_answers={_dbg_req.get('clarification_answers')!r}")
             send_whatsapp(incoming_number, generate_queue_confirmation(conv["request_queue"]))
 
         return jsonify({"status": "ok"}), 200
