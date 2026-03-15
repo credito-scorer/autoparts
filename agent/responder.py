@@ -230,10 +230,17 @@ def generate_queue_confirmation(requests: list) -> str:
         make  = req.get("make", "?")
         model = req.get("model", "?")
         year  = req.get("year", "?")
+        _specs = req.get("clarification_answers", [])
+        _specs_line = (
+            f"Specs adicionales confirmadas por el cliente: {' | '.join(_specs)}. "
+            if _specs else ""
+        )
         instruction = (
             f"Genera un resumen de confirmación del pedido para el cliente. "
             f"Pieza: {part}. Vehículo: {make} {model} {year}. "
+            f"{_specs_line}"
             f"Usa 🔩 para la pieza y 🚗 para el vehículo. "
+            f"Si hay specs adicionales usa ⚙️ en una tercera línea. "
             f"Pide que confirmen con 'sí' o que corrijan lo que esté mal. "
             f"Sé claro y conciso. No uses frases largas."
         )
@@ -262,8 +269,10 @@ def generate_queue_confirmation(requests: list) -> str:
         alert_claude_error(e, "responder.generate_queue_confirmation")
         if len(requests) == 1:
             req = requests[0]
+            _specs = req.get("clarification_answers", [])
+            _specs_line = f"\n⚙️ {' | '.join(_specs)}" if _specs else ""
             return (
-                f"🔩 {_resolved_part(req)} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}\n\n"
+                f"🔩 {_resolved_part(req)} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}{_specs_line}\n\n"
                 f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
             )
         lines = "\n".join(

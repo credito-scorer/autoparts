@@ -1865,6 +1865,8 @@ def _webhook_handler():
             )
         else:
             # Done clarifying — move to confirming
+            if parsed_req and answers:
+                parsed_req["clarification_answers"] = answers
             conv["clarifying"]            = False
             conv["clarification_context"] = None
             conv["confirming"]            = True
