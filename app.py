@@ -20,6 +20,7 @@ from agent.responder import (
     generate_queue_confirmation,
     GOODBYE_COMPLETED, GOODBYE_MID_FLOW,
 )
+from agent.luis import consult_luis
 from utils.logger import log_request, log_event
 from utils.dashboard import render_dashboard
 from connectors.sheets import get_order_log
@@ -884,7 +885,32 @@ def process_customer_request(number: str, message: str) -> None:
         conv["confirming"]    = True
         conv["last_message"]  = message
         conv["last_seen"]     = time.time()
-        send_whatsapp(number, generate_queue_confirmation(conv["request_queue"]))
+
+        # ── Luis intelligence layer ────────────────────────────────────────────
+        _customer_msg = None
+        _first_req = conv["request_queue"][0] if conv["request_queue"] else None
+        if _first_req and _first_req.get("part"):
+            try:
+                _luis = consult_luis(_first_req, message)
+                if _luis and _luis.get("zeli_message"):
+                    _customer_msg = _luis["zeli_message"]
+                if _luis and _luis.get("ronel_flag") and _luis.get("ronel_note"):
+                    _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+                    if _owner:
+                        _part_info = (
+                            f"{_first_req.get('part')} — "
+                            f"{_first_req.get('make')} {_first_req.get('model')} "
+                            f"{_first_req.get('year')}"
+                        )
+                        send_whatsapp(
+                            _owner,
+                            f"⚠️ *Luis flag — revisar*\n\n{_luis['ronel_note']}\n\n"
+                            f"Cliente: {number}\nPieza: {_part_info}",
+                        )
+            except Exception as _e:
+                print(f"⚠️ Luis integration error: {_e}")
+
+        send_whatsapp(number, _customer_msg or generate_queue_confirmation(conv["request_queue"]))
     elif (
         len(conv["request_queue"]) >= 2
         and not conv.get("asking_shared_vehicle")

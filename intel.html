@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeli Intel Agent</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #07090c;
+    --surface: #0c0f14;
+    --surface2: #111520;
+    --border: #191f2a;
+    --accent: #00d4ff;
+    --green: #00e676;
+    --green-dim: #00e67633;
+    --blue: #3b82f6;
+    --blue-dim: #3b82f622;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a78bfa;
+    --muted: #2a3442;
+    --text: #d8e4f0;
+    --text-dim: #5a6a7a;
+    --text-muted: #3a4a5a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    padding: 40px 24px;
+  }
+
+  .wrapper { max-width: 1100px; margin: 0 auto; }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 36px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .header-left h1 {
+    font-size: clamp(24px, 4vw, 42px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+
+  .header-left h1 em { font-style: normal; color: var(--accent); }
+
+  .header-left p {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 8px;
+  }
+
+  .run-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 24px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid var(--green);
+    background: transparent;
+    color: var(--green);
+    border-radius: 4px;
+    transition: background 0.15s, opacity 0.15s;
+    white-space: nowrap;
+  }
+
+  .run-btn:hover { background: var(--green-dim); }
+  .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .run-btn .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+
+  .run-btn.running .dot { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* ── PROGRESS ── */
+  .progress-wrap { margin-bottom: 8px; display: none; }
+  .progress-wrap.visible { display: block; }
+
+  .progress-bar {
+    height: 1px;
+    background: var(--muted);
+    border-radius: 1px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--green);
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+
+  .progress-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    margin-bottom: 28px;
+  }
+
+  /* ── TRACKS GRID ── */
+  .tracks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+
+  .track-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+
+  .track-card.new-track { border-style: dashed; }
+  .track-card.loading { border-color: var(--blue); }
+  .track-card.done { border-color: rgba(0,230,118,0.35); }
+  .track-card.error { border-color: rgba(239,68,68,0.4); }
+
+  .track-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .track-icon {
+    width: 36px; height: 36px;
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+  }
+
+  .track-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.3;
+  }
+
+  .track-desc {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 3px;
+    line-height: 1.4;
+  }
+
+  .new-badge {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 7px;
+    border-radius: 2px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    background: var(--blue-dim);
+    color: var(--blue);
+    border: 1px solid rgba(59,130,246,0.3);
+  }
+
+  .track-status {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    min-height: 14px;
+  }
+
+  .track-card.loading .track-status { color: var(--blue); }
+  .track-card.done .track-status { color: var(--green); }
+  .track-card.error .track-status { color: var(--red); }
+
+  .track-result {
+    margin-top: 12px;
+    display: none;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+
+  .track-card.done .track-result { display: block; }
+
+  .findings-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.7;
+    margin-bottom: 10px;
+  }
+
+  .insight-box {
+    background: var(--surface2);
+    border-left: 2px solid var(--green);
+    padding: 10px 12px;
+    border-radius: 0 4px 4px 0;
+    margin-bottom: 10px;
+  }
+
+  .insight-box.blue-box { border-left-color: var(--blue); }
+
+  .insight-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--green);
+    margin-bottom: 5px;
+  }
+
+  .insight-label.blue-label { color: var(--blue); }
+
+  .insight-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  .urgency-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .urgency-pill {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+  }
+
+  .pill-high { background: rgba(239,68,68,0.15); color: #f87171; }
+  .pill-med { background: rgba(245,158,11,0.15); color: var(--amber); }
+  .pill-low { background: rgba(0,230,118,0.12); color: var(--green); }
+  .pill-explore { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(59,130,246,0.3); }
+
+  .urgency-reason {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* ── VERTICAL CARDS ── */
+  .vertical-item {
+    margin-top: 10px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .vertical-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 5px;
+  }
+
+  .vertical-desc {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    margin-bottom: 8px;
+  }
+
+  .vertical-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .vmeta {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .vmeta-label {
+    color: var(--text-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: block;
+    margin-bottom: 1px;
+  }
+
+  /* ── SYNTHESIS ── */
+  .synthesis-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 28px;
+    display: none;
+    margin-top: 8px;
+  }
+
+  .synthesis-section.visible { display: block; }
+
+  .synthesis-header {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 20px;
+  }
+
+  .synthesis-body {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.9;
+    white-space: pre-wrap;
+  }
+
+  .synthesis-timestamp {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 20px;
+    text-align: right;
+  }
+
+  /* ── LOGIN ── */
+  .login-wrap {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 40px;
+    width: 100%;
+    max-width: 360px;
+  }
+
+  .login-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 6px;
+    letter-spacing: -0.5px;
+  }
+
+  .login-sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    margin-bottom: 28px;
+  }
+
+  .login-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .login-input:focus { border-color: var(--accent); }
+
+  .login-btn {
+    width: 100%;
+    padding: 12px;
+    background: transparent;
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+
+  .login-btn:hover { background: var(--green-dim); }
+
+  .login-error {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 10px;
+    display: none;
+  }
+
+  @media (max-width: 600px) {
+    .tracks-grid { grid-template-columns: 1fr; }
+    body { padding: 24px 16px; }
+    .vertical-meta { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div class="login-wrap" id="loginScreen">
+  <div class="login-card">
+    <div class="login-title">Zeli Intel Agent</div>
+    <div class="login-sub">Strategic intelligence · 8 tracks · Panama-first</div>
+    <input type="password" class="login-input" id="pwInput" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()" />
+    <button class="login-btn" onclick="doLogin()">Access →</button>
+    <div class="login-error" id="loginError">Incorrect password</div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="mainApp" style="display:none;">
+<div class="wrapper">
+
+  <header>
+    <div class="header-left">
+      <h1>Zeli <em>Intel</em></h1>
+      <p>8 tracks · 100-Year filtered · Panama · March 2026</p>
+    </div>
+    <button class="run-btn" id="runBtn" onclick="runIntel()">
+      <span class="dot"></span>
+      Run intelligence scan
+    </button>
+  </header>
+
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-label" id="progressLabel">0 of 8 tracks complete</div>
+  </div>
+
+  <div class="tracks-grid" id="tracksGrid"></div>
+
+  <div class="synthesis-section" id="synthesisSection">
+    <div class="synthesis-header">Strategic synthesis — generated by AI</div>
+    <div class="synthesis-body" id="synthesisBody"></div>
+    <div class="synthesis-timestamp" id="synthesisTimestamp"></div>
+  </div>
+
+</div>
+</div>
+
+<script>
+const INTEL_PASSWORD = 'intel0';
+
+function doLogin() {
+  const val = document.getElementById('pwInput').value;
+  if (val === INTEL_PASSWORD) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'block';
+  } else {
+    document.getElementById('loginError').style.display = 'block';
+  }
+}
+
+const TRACKS = [
+  {
+    id: 'whatsapp',
+    name: 'WhatsApp & Meta API',
+    desc: 'Platform changes that affect the bot',
+    icon: '💬',
+    query: `Search for the latest WhatsApp Business API updates, Meta messaging policy changes, and new WhatsApp Business Platform features as of March 2026. Focus on: new message template rules, 24-hour window changes, webhook updates, pricing changes, and any new bot capabilities released in the last 30-60 days.`
+  },
+  {
+    id: 'realestate',
+    name: 'Panama real estate',
+    desc: 'Buyer signals in Veraguas & Chiriquí',
+    icon: '🏠',
+    query: `Search for current Panama real estate market trends in March 2026, specifically in Veraguas province, Chiriquí province, and Santiago Panama. Look for: property price movements, buyer demand signals, new listings activity on OLX Panama and Encuentra24, and foreign investment trends in these regions.`
+  },
+  {
+    id: 'fintech',
+    name: 'LatAm fintech & MFI funding',
+    desc: 'Who is raising, what narrative works',
+    icon: '📈',
+    query: `Search for recent Latin America fintech funding rounds and microfinance institution news in early 2026. Focus on: which fintech companies are raising capital, what narratives work with investors (credit scoring, SMB lending, WhatsApp-native apps), any Panama or Central America fintech developments, and IFC or IDB investment activity in the region.`
+  },
+  {
+    id: 'autoparts',
+    name: 'Panama auto parts market',
+    desc: 'Demand signals & competitor moves',
+    icon: '🔩',
+    query: `Search for Panama auto parts market news in 2026. Look for: vehicle import statistics to Panama, auto parts import/export data, any new competitors or WhatsApp-based auto parts businesses in Panama, distributor news in Panama City, and demand signals for auto parts in the interior provinces (Veraguas, Chiriquí).`
+  },
+  {
+    id: 'aitools',
+    name: 'Agentic AI tooling',
+    desc: "New capabilities to drop into Zeli's stack",
+    icon: '🤖',
+    query: `Search for the latest agentic AI developments and tools in early 2026 relevant to WhatsApp bots, automated lead generation, web scraping agents, and AI-powered business automation for SMBs in emerging markets. Focus on new Claude, OpenAI, or open-source capabilities and new WhatsApp AI integrations.`
+  },
+  {
+    id: 'panama',
+    name: 'Panama SMB economy',
+    desc: 'Recession signals & business climate',
+    icon: '🇵🇦',
+    query: `Search for Panama economic news and small business conditions in early 2026. Look for: GDP growth or slowdown signals, small business credit access, consumer spending in interior provinces, government SMB programs, Panama Canal traffic as economic indicator, and inflation affecting small businesses.`
+  },
+  {
+    id: 'logistics',
+    name: 'Panama logistics & trade',
+    desc: 'Canal, Zona Libre, freight shifts',
+    icon: '🚢',
+    query: `Search for Panama logistics, shipping, and trade news in early 2026. Focus on: Panama Canal traffic and tonnage trends, Zona Libre de Colón activity, last-mile delivery companies in Panama's interior provinces, new freight routes or logistics startups in Central America, and how global supply chain shifts affect Panama's strategic trade position.`
+  },
+  {
+    id: 'verticals',
+    name: 'Untapped vertical opportunities',
+    desc: "Promising pivots built on Zeli's exact stack",
+    icon: '🔭',
+    isNew: true,
+    query: `Search for high-potential business verticals in Panama and Central America in 2026 that could be served by a WhatsApp-native AI platform with these specific advantages: (1) WhatsApp bot on Railway with Twilio and Meta Cloud API, (2) Claude AI for Spanish NLP, (3) behavioral transaction data from SMB users, (4) Panama territorial tax base, (5) Zona Libre de Colón proximity, (6) solo operator requiring 50%+ margins.
+
+Look for: underserved B2B markets in Panama where buyers and sellers are fragmented and communicate on WhatsApp, industries with manual procurement or sourcing pain points similar to auto parts (pharmacies, agriculture, construction, hardware, restaurant supplies, hospitality), successful WhatsApp-native business models emerging elsewhere in Latin America, and Panama-specific market gaps a tech-enabled intermediary could own. Which verticals have low competition, high willingness to pay, and repeat transaction patterns?`
+  }
+];
+
+let results = {};
+let completedCount = 0;
+
+const SYSTEM_STANDARD = `You are the Zeli Intel Agent — a strategic intelligence analyst for Zeli Technologies, a WhatsApp-native AI automation company based in Santiago, Veraguas, Panama.
+
+Zeli's active verticals: (1) auto parts sourcing bot for mechanics on WhatsApp, sold as SaaS at $30-50/month per store, (2) real estate lead generation targeting brokers in Veraguas and Chiriquí. Long-term vision: bot network → ML credit scoring SaaS → proprietary MFI using behavioral transaction data.
+
+For each intelligence track produce:
+1. Key findings in 2-3 sentences (factual, current, concise)
+2. A "So what for Zeli" implication in 1-2 sentences — specific to Zeli's exact situation
+3. Urgency score: HIGH (act in next 30 days), MEDIUM (monitor), or LOW (awareness only)
+
+Format your response EXACTLY as:
+FINDINGS: [2-3 sentence summary]
+ZELI_INSIGHT: [1-2 sentence specific implication for Zeli]
+URGENCY: [HIGH or MEDIUM or LOW]
+REASON: [one short phrase]`;
+
+const SYSTEM_VERTICALS = `You are the Zeli Intel Agent — an opportunity scout for Zeli Technologies, a WhatsApp-native AI company in Santiago, Veraguas, Panama.
+
+Zeli's exact stack: WhatsApp bot (Flask + Railway + Twilio + Meta Cloud API + Claude NLP), catalogue indexing pipeline, behavioral transaction data from SMB users, Panama territorial tax base, Zona Libre de Colón proximity, solo founder operator.
+
+100-Year filters any new vertical must pass: 50%+ net margins possible, unit economics profitable from day 1, repeat transaction pattern, unfair advantage Zeli already has, operable by a solo founder.
+
+Identify 3 specific vertical opportunities. For each provide:
+- Name and one-line description
+- Why Zeli's existing stack gives an unfair advantage
+- The repeat transaction mechanism
+- Estimated margin potential
+- Main risk or blocker
+
+Format EXACTLY as:
+FINDINGS: [2-3 sentence overview of the opportunity landscape]
+VERTICAL_1: [name] | [description] | [Zeli advantage] | [repeat mechanism] | [margin potential] | [main risk]
+VERTICAL_2: [name] | [description] | [Zeli advantage] | [repeat mechanism] | [margin potential] | [main risk]
+VERTICAL_3: [name] | [description] | [Zeli advantage] | [repeat mechanism] | [margin potential] | [main risk]
+ZELI_INSIGHT: [1-2 sentences on which fits best with Zeli's current momentum]
+URGENCY: EXPLORE
+REASON: [one short phrase]`;
+
+function renderTracks() {
+  document.getElementById('tracksGrid').innerHTML = TRACKS.map(t => `
+    <div class="track-card${t.isNew ? ' new-track' : ''}" id="card-${t.id}">
+      <div class="track-header">
+        <div class="track-icon">${t.icon}</div>
+        <div style="flex:1;">
+          <div class="track-name">${t.name}</div>
+          <div class="track-desc">${t.desc}</div>
+          ${t.isNew ? '<span class="new-badge">new track</span>' : ''}
+        </div>
+      </div>
+      <div class="track-status" id="status-${t.id}">Waiting to scan...</div>
+      <div class="track-result" id="result-${t.id}"></div>
+    </div>
+  `).join('');
+}
+
+async function callClaude(systemPrompt, userPrompt) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+}
+
+function parseStandard(text) {
+  return {
+    findings: text.match(/FINDINGS:\s*([\s\S]*?)(?=ZELI_INSIGHT:|$)/)?.[1]?.trim() || text,
+    insight:  text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '',
+    urgency:  text.match(/URGENCY:\s*(HIGH|MEDIUM|LOW)/)?.[1] || 'MEDIUM',
+    reason:   text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || ''
+  };
+}
+
+function parseVerticals(text) {
+  const verticals = [];
+  for (let i = 1; i <= 3; i++) {
+    const m = text.match(new RegExp(`VERTICAL_${i}:\\s*([\\s\\S]*?)(?=VERTICAL_${i+1}:|ZELI_INSIGHT:|$)`));
+    if (m) {
+      const p = m[1].trim().split('|').map(s => s.trim());
+      verticals.push({ name: p[0]||'', desc: p[1]||'', advantage: p[2]||'', repeat: p[3]||'', margin: p[4]||'', risk: p[5]||'' });
+    }
+  }
+  return {
+    findings: text.match(/FINDINGS:\s*([\s\S]*?)(?=VERTICAL_1:|$)/)?.[1]?.trim() || '',
+    insight:  text.match(/ZELI_INSIGHT:\s*([\s\S]*?)(?=URGENCY:|$)/)?.[1]?.trim() || '',
+    urgency:  'EXPLORE',
+    reason:   text.match(/REASON:\s*([\s\S]*?)$/)?.[1]?.trim() || '',
+    verticals
+  };
+}
+
+function pillHtml(urgency) {
+  const cls = urgency === 'HIGH' ? 'pill-high' : urgency === 'LOW' ? 'pill-low' : urgency === 'EXPLORE' ? 'pill-explore' : 'pill-med';
+  return `<span class="urgency-pill ${cls}">${urgency}</span>`;
+}
+
+function renderVertical(v) {
+  return `
+    <div class="vertical-item">
+      <div class="vertical-name">${v.name}</div>
+      <div class="vertical-desc">${v.desc}</div>
+      <div class="vertical-meta">
+        ${v.advantage ? `<div class="vmeta"><span class="vmeta-label">Zeli edge</span>${v.advantage}</div>` : ''}
+        ${v.repeat    ? `<div class="vmeta"><span class="vmeta-label">Repeat loop</span>${v.repeat}</div>` : ''}
+        ${v.margin    ? `<div class="vmeta"><span class="vmeta-label">Margin potential</span>${v.margin}</div>` : ''}
+        ${v.risk      ? `<div class="vmeta"><span class="vmeta-label">Main risk</span>${v.risk}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+async function runTrack(track) {
+  const card   = document.getElementById(`card-${track.id}`);
+  const status = document.getElementById(`status-${track.id}`);
+  const result = document.getElementById(`result-${track.id}`);
+  const base   = `track-card${track.isNew ? ' new-track' : ''}`;
+
+  card.className = base + ' loading';
+  status.textContent = 'Scanning...';
+
+  try {
+    const isV = track.id === 'verticals';
+    const raw  = await callClaude(isV ? SYSTEM_VERTICALS : SYSTEM_STANDARD, track.query);
+
+    if (isV) {
+      const p = parseVerticals(raw);
+      results[track.id] = p;
+      result.innerHTML = `
+        <div class="findings-text">${p.findings}</div>
+        ${p.verticals.map(renderVertical).join('')}
+        ${p.insight ? `<div class="insight-box blue-box" style="margin-top:12px;">
+          <div class="insight-label blue-label">Strategic fit for Zeli</div>
+          <div class="insight-text">${p.insight}</div>
+        </div>` : ''}
+        <div class="urgency-row">${pillHtml(p.urgency)}<span class="urgency-reason">${p.reason}</span></div>`;
+    } else {
+      const p = parseStandard(raw);
+      results[track.id] = p;
+      result.innerHTML = `
+        <div class="findings-text">${p.findings}</div>
+        ${p.insight ? `<div class="insight-box">
+          <div class="insight-label">So what for Zeli</div>
+          <div class="insight-text">${p.insight}</div>
+        </div>` : ''}
+        <div class="urgency-row">${pillHtml(p.urgency)}<span class="urgency-reason">${p.reason}</span></div>`;
+    }
+
+    card.className = base + ' done';
+    status.textContent = 'Scan complete';
+  } catch(e) {
+    card.className = base + ' error';
+    status.textContent = 'Error: ' + e.message;
+    results[track.id] = null;
+  }
+
+  completedCount++;
+  document.getElementById('progressFill').style.width = Math.round(completedCount / TRACKS.length * 100) + '%';
+  document.getElementById('progressLabel').textContent = `${completedCount} of ${TRACKS.length} tracks complete`;
+
+  if (completedCount === TRACKS.length) await runSynthesis();
+}
+
+async function runSynthesis() {
+  const section = document.getElementById('synthesisSection');
+  const body    = document.getElementById('synthesisBody');
+  const btn     = document.getElementById('runBtn');
+
+  section.classList.add('visible');
+  body.textContent = 'Generating strategic synthesis...';
+
+  const summaries = TRACKS.map(t => {
+    const r = results[t.id];
+    if (!r) return `${t.name}: no data`;
+    if (t.id === 'verticals' && r.verticals) {
+      const vList = r.verticals.map(v => `${v.name} (${v.desc}; Zeli edge: ${v.advantage})`).join(' / ');
+      return `Untapped verticals — ${r.findings} Top picks: ${vList} | ${r.insight}`;
+    }
+    return `${t.name}: ${r.findings} | Zeli implication: ${r.insight} | Urgency: ${r.urgency}`;
+  }).join('\n\n');
+
+  try {
+    const raw = await callClaude(
+      `You are the Zeli Intel Agent synthesizer for Zeli Technologies — a WhatsApp-native AI company in Santiago, Panama, solo-operated, building toward an MFI via bot network + credit scoring. Apply the 100-Year checklist framework. Produce a tight strategic synthesis: (1) top 3 actions for the next 30 days, (2) one risk to watch, (3) one vertical from the opportunity scan worth a deeper look even if Zeli is already successful, (4) one thing from the 8 tracks that wasn't on the radar before this scan. Be specific to Zeli. No fluff. Plain paragraphs only — no markdown headers, no bullet points.`,
+      `8 intelligence tracks scanned this week:\n\n${summaries}\n\nProvide the strategic synthesis for Zeli's next 30 days.`
+    );
+    body.textContent = raw;
+  } catch(e) {
+    body.textContent = 'Synthesis unavailable. Review individual track findings above.';
+  }
+
+  document.getElementById('synthesisTimestamp').textContent =
+    'Generated ' + new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+
+  btn.innerHTML = '<span class="dot"></span> Run again';
+  btn.disabled = false;
+  btn.classList.remove('running');
+}
+
+async function runIntel() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.classList.add('running');
+  btn.innerHTML = '<span class="dot"></span> Scanning...';
+
+  completedCount = 0;
+  results = {};
+
+  document.getElementById('progressWrap').classList.add('visible');
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressLabel').textContent = `0 of ${TRACKS.length} tracks complete`;
+  document.getElementById('synthesisSection').classList.remove('visible');
+
+  TRACKS.forEach(t => {
+    const base = `track-card${t.isNew ? ' new-track' : ''}`;
+    document.getElementById(`card-${t.id}`).className = base;
+    document.getElementById(`status-${t.id}`).textContent = 'Waiting to scan...';
+    document.getElementById(`result-${t.id}`).innerHTML = '';
+  });
+
+  await Promise.allSettled(TRACKS.map(t => runTrack(t)));
+}
+
+renderTracks();
+</script>
+</body>
+</html>
