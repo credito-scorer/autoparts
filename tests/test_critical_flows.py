@@ -21,6 +21,11 @@ class CriticalFlowTests(unittest.TestCase):
             app_module.escalation_message_map.clear()
             app_module.pending_approvals.clear()
             app_module.pending_selections.clear()
+            app_module.pending_urgency.clear()
+            app_module.pending_quotes.clear()
+            app_module.owner_briefing_map.clear()
+            app_module.owner_briefing_context.clear()
+            app_module.conversations.clear()
             app_module.approval_message_map.clear()
             app_module.processing_messages.clear()
             app_module._startup_notified = False
@@ -129,6 +134,59 @@ class CriticalFlowTests(unittest.TestCase):
 
         self.assertEqual(len(sent), 1)
         self.assertIn("Zeli Bot Online", sent[0][1])
+
+    def test_can_wait_does_not_auto_send_catalogue_options(self):
+        customer = "+50760001111"
+        queue = [{
+            "part": "Alternador",
+            "make": "Toyota",
+            "model": "Hilux",
+            "year": "2008",
+            "urgency": "puede_esperar",
+        }]
+        app_module.pending_urgency[customer] = {
+            "queue": queue,
+            "raw_message": "alternador hilux 2008 diesel original",
+            "attempts": 0,
+            "created_at": app_module.time.time(),
+            "awaiting_confirmation": True,
+        }
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.canwait.confirm",
+                            "from": customer.replace("+", ""),
+                            "type": "text",
+                            "text": {"body": "si"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        with patch.object(app_module, "_send_owner_briefing") as owner_briefing_mock, \
+             patch.object(app_module, "_send_catalogue_options") as send_catalogue_mock, \
+             patch.object(app_module, "send_whatsapp", return_value="sid_text"):
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        owner_briefing_mock.assert_called_once()
+        send_catalogue_mock.assert_not_called()
 
 
 if __name__ == "__main__":

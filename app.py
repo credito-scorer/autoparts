@@ -1849,22 +1849,6 @@ def _webhook_handler():
                     if msg_sid:
                         with _state_lock:
                             escalation_message_map[msg_sid] = incoming_number
-                elif req.get("urgency") == "puede_esperar":
-                    results = search_catalogue(req.get("part", ""), req.get("make", ""))
-                    if results:
-                        threading.Thread(
-                            target=_send_catalogue_options,
-                            args=(incoming_number, raw, queue, results),
-                            daemon=True,
-                        ).start()
-                    else:
-                        send_whatsapp(
-                            owner_number,
-                            f"❌ *No encontrado en catálogos*\n"
-                            f"Pieza: {req.get('part', '?')} — "
-                            f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
-                            f"Responde al briefing anterior con QUOTE o NOFOUND."
-                        )
                 return jsonify({"status": "ok"}), 200
 
             representative = queue[0] if queue else {}
@@ -1937,7 +1921,7 @@ def _webhook_handler():
             send_whatsapp(incoming_number, generate_queue_confirmation(queue))
             return jsonify({"status": "ok"}), 200
 
-        # Didn't match either pattern — re-ask once, then default to catalogue search
+        # Didn't match either pattern — re-ask once, then assume can-wait path
         urgency_data["attempts"] += 1
         send_whatsapp(
             incoming_number,
