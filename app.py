@@ -1014,6 +1014,9 @@ def is_customer_beta(number: str) -> bool:
     raw = os.getenv("CUSTOMER_BETA_NUMBERS", "")
     if not raw:
         return False
+    # Accept comma/newline/semicolon separators to reduce config mistakes.
+    for sep in ("\n", ";"):
+        raw = raw.replace(sep, ",")
     whitelist = {_normalize_number(n.strip()) for n in raw.split(",") if n.strip()}
     return _normalize_number(number) in whitelist
 
