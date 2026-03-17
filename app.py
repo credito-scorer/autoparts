@@ -574,6 +574,16 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
                 a.capitalize() for a in _clarif_answers
             ) + "\n\n"
 
+        # ── Urgency block ─────────────────────────────────────────────────
+        _urgency = req.get("urgency")
+        _urgency_block = ""
+        if _urgency:
+            _urgency_label = (
+                "🔴 Urgente — necesita hoy" if _urgency == "urgente"
+                else "🟡 Puede esperar 1-2 días"
+            )
+            _urgency_block = f"⏱️ Urgencia: {_urgency_label}\n\n"
+
         # ── Luis block (appended after parser if Luis data is present) ──────
         _luis = req.get("luis")
         _luis_block = ""
@@ -604,6 +614,7 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
             f"  Resolución: {resolution_label}\n"
             f"  Confianza: {confidence_label}\n\n"
             f"{_clarif_block}"
+            f"{_urgency_block}"
             f"{_luis_block}"
             f"↩️ Responde con:\n"
             f"QUOTE | precio | entrega | descripción\n"
@@ -1823,10 +1834,9 @@ def _webhook_handler():
 
         if is_urgent:
             pending_urgency.pop(incoming_number, None)
-            send_whatsapp(
-                incoming_number,
-                "Entendido, estamos en eso ahora mismo. ⚡ Te confirmamos en breve."
-            )
+            for _req in queue:
+                _req["urgency"] = "urgente"
+            _send_owner_briefing(incoming_number, raw, queue)
             req = queue[0] if queue else {}
             msg_sid = send_whatsapp(
                 owner_number,
@@ -1843,7 +1853,9 @@ def _webhook_handler():
 
         if can_wait or urgency_data["attempts"] >= 1:
             pending_urgency.pop(incoming_number, None)
-            send_whatsapp(incoming_number, "Perfecto, déjame revisar. ⏳")
+            for _req in queue:
+                _req["urgency"] = "puede_esperar"
+            _send_owner_briefing(incoming_number, raw, queue)
             req     = queue[0] if queue else {}
             results = search_catalogue(req.get("part", ""), req.get("make", ""))
             if results:
@@ -1853,21 +1865,14 @@ def _webhook_handler():
                     daemon=True,
                 ).start()
             else:
-                msg_sid = send_whatsapp(
+                # Full briefing already sent — supplemental no-results alert (no SID remap)
+                send_whatsapp(
                     owner_number,
-                    f"🔍 *Sourcing Manual Requerido*\n"
-                    f"Cliente: {incoming_number}\n"
+                    f"❌ *No encontrado en catálogos*\n"
                     f"Pieza: {req.get('part', '?')} — "
                     f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
-                    f"❌ No encontrado en catálogos\n"
-                    f"↩️ Responde con precio y disponibilidad"
+                    f"Responde al briefing anterior con QUOTE o NOFOUND."
                 )
-                if msg_sid:
-                    owner_briefing_map[msg_sid] = incoming_number
-                    owner_briefing_context[incoming_number] = {
-                        "parsed":      req,
-                        "raw_message": raw,
-                    }
             return jsonify({"status": "ok"}), 200
 
         # Didn't match either pattern — re-ask once, then default to catalogue search
@@ -1951,11 +1956,6 @@ def _webhook_handler():
 
         if affirmative:
             conv["confirming"] = False
-            _send_owner_briefing(
-                incoming_number,
-                incoming_message,
-                conv["request_queue"]
-            )
             conv["state"]      = ConversationState.WAITING
             queue = list(conv["request_queue"])
             conv["request_queue"] = []
