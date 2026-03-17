@@ -560,6 +560,14 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
         )
         confidence_label = _CONFIDENCE_LABELS.get(req.get("confidence", ""), "—")
 
+        # ── Clarification answers block ──────────────────────────────────────
+        _clarif_answers = req.get("clarification_answers") or []
+        _clarif_block = ""
+        if _clarif_answers:
+            _clarif_block = "⚙️ Especificaciones cliente:\n  " + "\n  ".join(
+                a.capitalize() for a in _clarif_answers
+            ) + "\n\n"
+
         # ── Luis block (appended after parser if Luis data is present) ──────
         _luis = req.get("luis")
         _luis_block = ""
@@ -589,6 +597,7 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
             f"  Año: {req.get('year') or '—'}\n"
             f"  Resolución: {resolution_label}\n"
             f"  Confianza: {confidence_label}\n\n"
+            f"{_clarif_block}"
             f"{_luis_block}"
             f"↩️ Responde con:\n"
             f"QUOTE | precio | entrega | descripción\n"
