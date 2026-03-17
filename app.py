@@ -70,8 +70,14 @@ active_seller_sessions_ts = {}      # seller_number → last_activity epoch (flo
 CATALOGUE_INDEX: list = []
 
 # Urgency detection phrase lists
-_URGENCY_NOW  = ["hoy", "urgente", "ya", "ahora", "lo antes posible"]
-_URGENCY_WAIT = ["esperar", "1-2", "días", "dias", "mañana", "no urgente", "puede esperar"]
+_URGENCY_NOW    = ["hoy", "urgente", "ya", "ahora", "lo antes posible"]
+_URGENCY_WAIT   = ["esperar", "1-2", "días", "dias", "mañana", "no urgente", "puede esperar"]
+_URGENCY_CANCEL = [
+    "no nada", "ya no", "no gracias", "dejalo", "déjalo",
+    "olvídalo", "olvidalo", "no quiero", "cancelar", "cancela",
+    "no necesito", "ya no lo necesito",
+]
+_URGENCY_TTL    = 7200  # seconds — expire pending_urgency state after 2 hours
 # Maps seller_number → owner session context
 # { "+507...": { "name": "Luis", "started_at": "..." } }
 seller_message_map     = {}
@@ -1776,14 +1782,44 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 6.2 PENDING URGENCY → customer answering "need it today or can wait?"
+    # Guard: expire stale state or a fresh greeting — fall through to normal routing
+    if incoming_number in pending_urgency:
+        _ud = pending_urgency[incoming_number]
+        if time.time() - _ud.get("created_at", 0) > _URGENCY_TTL or is_greeting(incoming_message):
+            pending_urgency.pop(incoming_number, None)
+
     if incoming_number in pending_urgency:
         urgency_data = pending_urgency[incoming_number]
         queue        = urgency_data["queue"]
         raw          = urgency_data["raw_message"]
         msg_lower    = incoming_message.lower().strip()
 
+        is_cancel = (
+            any(p in msg_lower for p in _URGENCY_CANCEL)
+            or msg_lower in {"no", "nada"}
+        )
         is_urgent = any(p in msg_lower for p in _URGENCY_NOW)
         can_wait  = any(p in msg_lower for p in _URGENCY_WAIT)
+
+        if is_cancel:
+            pending_urgency.pop(incoming_number, None)
+            req = queue[0] if queue else {}
+            log_request({
+                "customer_number": incoming_number,
+                "raw_message":     incoming_message,
+                "parsed":          req,
+                "status":          "cancelled_by_customer",
+            })
+            cancel_followup(incoming_number)
+            cancel_long_wait_alert(incoming_number)
+            with _state_lock:
+                conversations.pop(incoming_number, None)
+            pending_selections.pop(incoming_number, None)
+            send_whatsapp(
+                incoming_number,
+                "Entendido, pedido cancelado. Si necesitas algo más, aquí estamos. 👋"
+            )
+            return jsonify({"status": "ok"}), 200
 
         if is_urgent:
             pending_urgency.pop(incoming_number, None)
@@ -1928,6 +1964,7 @@ def _webhook_handler():
                 "queue":       queue,
                 "raw_message": incoming_message,
                 "attempts":    0,
+                "created_at":  time.time(),
             }
             send_whatsapp(
                 incoming_number,
