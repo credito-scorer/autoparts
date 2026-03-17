@@ -232,16 +232,19 @@ def generate_queue_confirmation(requests: list) -> str:
         model = req.get("model", "?")
         year  = req.get("year", "?")
         _specs = req.get("clarification_answers", [])
-        _specs_line = (
-            f"Specs adicionales confirmadas por el cliente: {' | '.join(_specs)}. "
-            if _specs else ""
-        )
+        if _specs:
+            # Fixed-format template — don't ask Haiku to render specs, do it deterministically
+            _specs_str = " | ".join(s.capitalize() for s in _specs)
+            return (
+                f"🔧 {part}\n"
+                f"🚗 {make} {model} {year}\n"
+                f"⚙️ {_specs_str}\n\n"
+                f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
+            )
         instruction = (
             f"Genera un resumen de confirmación del pedido para el cliente. "
             f"Pieza: {part}. Vehículo: {make} {model} {year}. "
-            f"{_specs_line}"
             f"Usa 🔩 para la pieza y 🚗 para el vehículo. "
-            f"Si hay specs adicionales usa ⚙️ en una tercera línea. "
             f"Pide que confirmen con 'sí' o que corrijan lo que esté mal. "
             f"Sé claro y conciso. No uses frases largas."
         )
