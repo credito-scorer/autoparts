@@ -78,6 +78,24 @@ _URGENCY_CANCEL = [
     "no necesito", "ya no lo necesito",
 ]
 _URGENCY_TTL    = 7200  # seconds — expire pending_urgency state after 2 hours
+# pending_urgency payload may include:
+# - awaiting_confirmation: True when urgency is already captured and we're waiting
+#   for the final "sí / corrígeme" confirmation before owner briefing.
+
+
+def _start_urgency_step(customer_number: str, raw_message: str, queue: list) -> None:
+    """Ask urgency before final confirmation/owner briefing."""
+    pending_urgency[customer_number] = {
+        "queue":                 list(queue),
+        "raw_message":           raw_message,
+        "attempts":              0,
+        "created_at":            time.time(),
+        "awaiting_confirmation": False,
+    }
+    send_whatsapp(
+        customer_number,
+        "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
+    )
 # Maps seller_number → owner session context
 # { "+507...": { "name": "Luis", "started_at": "..." } }
 seller_message_map     = {}
@@ -966,9 +984,8 @@ def process_customer_request(number: str, message: str) -> None:
                         f"Cliente: {number}\nPieza: {_part_info}",
                     )
         else:
-            # ── No clarification needed (or Luis failed) → straight to confirming ─
+            # ── No clarification needed (or Luis failed) → ask urgency first ─────
             conv["clarifying"] = False   # flip back optimistic lock if set above
-            conv["confirming"] = True
             _customer_msg = _luis.get("zeli_message") if _luis else None
             if _luis and _luis.get("ronel_flag") and _luis.get("ronel_note"):
                 _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
@@ -983,7 +1000,9 @@ def process_customer_request(number: str, message: str) -> None:
                         f"⚠️ *Luis flag — revisar*\n\n{_luis['ronel_note']}\n\n"
                         f"Cliente: {number}\nPieza: {_part_info}",
                     )
-            send_whatsapp(number, _customer_msg or generate_queue_confirmation(conv["request_queue"]))
+            if _customer_msg:
+                send_whatsapp(number, _customer_msg)
+            _start_urgency_step(number, message, conv["request_queue"])
     elif (
         len(conv["request_queue"]) >= 2
         and not conv.get("asking_shared_vehicle")
@@ -1807,6 +1826,67 @@ def _webhook_handler():
         queue        = urgency_data["queue"]
         raw          = urgency_data["raw_message"]
         msg_lower    = incoming_message.lower().strip()
+        awaiting_confirmation = urgency_data.get("awaiting_confirmation", False)
+
+        if awaiting_confirmation:
+            if _is_affirmative(incoming_message):
+                pending_urgency.pop(incoming_number, None)
+                with _state_lock:
+                    conv = conversations.get(incoming_number)
+                    if conv:
+                        conv["confirming"] = False
+                _send_owner_briefing(incoming_number, raw, queue)
+                req = queue[0] if queue else {}
+                if req.get("urgency") == "urgente":
+                    msg_sid = send_whatsapp(
+                        owner_number,
+                        f"⚡ *Sourcing Urgente — Live Mode*\n"
+                        f"Cliente: {incoming_number}\n"
+                        f"Pieza: {req.get('part', '?')} — "
+                        f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
+                        f"❗ Necesita hoy. Toma el hilo directamente."
+                    )
+                    if msg_sid:
+                        with _state_lock:
+                            escalation_message_map[msg_sid] = incoming_number
+                elif req.get("urgency") == "puede_esperar":
+                    results = search_catalogue(req.get("part", ""), req.get("make", ""))
+                    if results:
+                        threading.Thread(
+                            target=_send_catalogue_options,
+                            args=(incoming_number, raw, queue, results),
+                            daemon=True,
+                        ).start()
+                    else:
+                        send_whatsapp(
+                            owner_number,
+                            f"❌ *No encontrado en catálogos*\n"
+                            f"Pieza: {req.get('part', '?')} — "
+                            f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
+                            f"Responde al briefing anterior con QUOTE o NOFOUND."
+                        )
+                return jsonify({"status": "ok"}), 200
+
+            representative = queue[0] if queue else {}
+            correction = parse_correction(incoming_message, representative)
+            if correction:
+                _apply_to_queue(queue, correction)
+                urgency_data["queue"] = queue
+                send_whatsapp(
+                    incoming_number,
+                    generate_queue_confirmation(queue)
+                )
+            else:
+                send_whatsapp(
+                    incoming_number,
+                    generate_response("correction_reminder", incoming_message, context={
+                        "part":  representative.get("part"),
+                        "make":  representative.get("make"),
+                        "model": representative.get("model"),
+                        "year":  representative.get("year"),
+                    })
+                )
+            return jsonify({"status": "ok"}), 200
 
         is_cancel = (
             any(p in msg_lower for p in _URGENCY_CANCEL)
@@ -1836,46 +1916,25 @@ def _webhook_handler():
             return jsonify({"status": "ok"}), 200
 
         if is_urgent:
-            pending_urgency.pop(incoming_number, None)
             for _req in queue:
                 _req["urgency"] = "urgente"
-            _send_owner_briefing(incoming_number, raw, queue)
-            req = queue[0] if queue else {}
-            msg_sid = send_whatsapp(
-                owner_number,
-                f"⚡ *Sourcing Urgente — Live Mode*\n"
-                f"Cliente: {incoming_number}\n"
-                f"Pieza: {req.get('part', '?')} — "
-                f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
-                f"❗ Necesita hoy. Toma el hilo directamente."
-            )
-            if msg_sid:
-                with _state_lock:
-                    escalation_message_map[msg_sid] = incoming_number
+            urgency_data["awaiting_confirmation"] = True
+            with _state_lock:
+                conv = conversations.get(incoming_number)
+                if conv:
+                    conv["confirming"] = True
+            send_whatsapp(incoming_number, generate_queue_confirmation(queue))
             return jsonify({"status": "ok"}), 200
 
         if can_wait or urgency_data["attempts"] >= 1:
-            pending_urgency.pop(incoming_number, None)
             for _req in queue:
                 _req["urgency"] = "puede_esperar"
-            _send_owner_briefing(incoming_number, raw, queue)
-            req     = queue[0] if queue else {}
-            results = search_catalogue(req.get("part", ""), req.get("make", ""))
-            if results:
-                threading.Thread(
-                    target=_send_catalogue_options,
-                    args=(incoming_number, raw, queue, results),
-                    daemon=True,
-                ).start()
-            else:
-                # Full briefing already sent — supplemental no-results alert (no SID remap)
-                send_whatsapp(
-                    owner_number,
-                    f"❌ *No encontrado en catálogos*\n"
-                    f"Pieza: {req.get('part', '?')} — "
-                    f"{req.get('make', '?')} {req.get('model', '?')} {req.get('year', '?')}\n"
-                    f"Responde al briefing anterior con QUOTE o NOFOUND."
-                )
+            urgency_data["awaiting_confirmation"] = True
+            with _state_lock:
+                conv = conversations.get(incoming_number)
+                if conv:
+                    conv["confirming"] = True
+            send_whatsapp(incoming_number, generate_queue_confirmation(queue))
             return jsonify({"status": "ok"}), 200
 
         # Didn't match either pattern — re-ask once, then default to catalogue search
@@ -1923,13 +1982,12 @@ def _webhook_handler():
                 _luis2.get("zeli_message") or "¿Puedes darme más detalles sobre la pieza?",
             )
         else:
-            # Done clarifying — move to confirming
+            # Done clarifying — ask urgency before confirming
             if parsed_req and answers:
                 parsed_req["clarification_answers"] = answers
             with _state_lock:
                 conv["clarifying"]            = False
                 conv["clarification_context"] = None
-                conv["confirming"]            = True
 
             if _luis2 and _luis2.get("ronel_flag") and _luis2.get("ronel_note"):
                 _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
@@ -1947,7 +2005,7 @@ def _webhook_handler():
 
             _dbg_req = conv["request_queue"][0] if conv["request_queue"] else {}
             print(f"🐛 [6.4] queue[0] keys={list(_dbg_req.keys())} clarification_answers={_dbg_req.get('clarification_answers')!r}")
-            send_whatsapp(incoming_number, generate_queue_confirmation(conv["request_queue"]))
+            _start_urgency_step(incoming_number, incoming_message, conv["request_queue"])
 
         return jsonify({"status": "ok"}), 200
 
@@ -2068,8 +2126,7 @@ def _webhook_handler():
                     conv["asking_per_item"]    = False
                     conv["current_item_index"] = 0
                     if _queue_all_complete(queue):
-                        conv["confirming"] = True
-                        send_whatsapp(incoming_number, generate_queue_confirmation(queue))
+                        _start_urgency_step(incoming_number, incoming_message, queue)
                     else:
                         _send_queue_missing_prompt(incoming_number, incoming_message, conv)
                 else:
