@@ -911,14 +911,14 @@ def process_customer_request(number: str, message: str) -> None:
         _first_req = conv["request_queue"][0] if conv["request_queue"] else None
         _luis = None
         if _first_req and _first_req.get("part"):
+            conv["clarifying"] = True   # set before API call to prevent race condition
             try:
                 _luis = consult_luis(_first_req, message)
             except Exception as _e:
                 print(f"⚠️ Luis integration error: {_e}")
 
-        if _luis and _luis.get("needs_clarification") and _luis.get("zeli_message"):
+        if _luis and (_luis.get("luis") or {}).get("needs_clarification") and _luis.get("zeli_message"):
             # ── Enter clarifying state — do NOT set confirming yet ─────────────
-            conv["clarifying"] = True
             conv["clarification_context"] = {
                 "raw_message":       message,
                 "parsed_req":        _first_req,
@@ -941,6 +941,7 @@ def process_customer_request(number: str, message: str) -> None:
                     )
         else:
             # ── No clarification needed (or Luis failed) → straight to confirming ─
+            conv["clarifying"] = False   # flip back optimistic lock if set above
             conv["confirming"] = True
             _customer_msg = _luis.get("zeli_message") if _luis else None
             if _luis and _luis.get("ronel_flag") and _luis.get("ronel_note"):
@@ -1833,7 +1834,8 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 6.4 CLARIFYING → customer answering Luis's clarifying questions
-    conv = conversations.get(incoming_number)
+    with _state_lock:
+        conv = conversations.get(incoming_number)
     if conv and conv.get("clarifying"):
         if is_goodbye(incoming_message):
             _close_conversation(incoming_number, mid_flow=True)
@@ -1851,14 +1853,18 @@ def _webhook_handler():
                     {"role": "zeli",     "content": ctx.get("initial_question", "")},
                     {"role": "customer", "content": incoming_message},
                 ]
-                _luis2 = consult_luis(parsed_req, incoming_message, customer_history=_history)
+                _luis2 = consult_luis(dict(parsed_req), incoming_message, customer_history=_history)
             except Exception as _e:
                 print(f"⚠️ Luis clarification round 2 error: {_e}")
 
-        # Allow at most one more round of clarification (len(answers) == 1 means first answer)
-        if _luis2 and _luis2.get("needs_clarification") and len(answers) < 2:
-            ctx["answers"] = answers
-            conv["clarification_context"] = ctx
+        _luis2_needs_clarification = (_luis2 is not None) and (_luis2.get("luis") or {}).get("needs_clarification", False)
+        print(f"🐛 [6.4] Luis2: needs_clarification={_luis2_needs_clarification!r} zeli_message={(_luis2 or {}).get('zeli_message', '')[:60]!r} answers={answers}")
+
+        # Force confirming once customer has answered at least once — no infinite loops
+        if _luis2_needs_clarification and len(answers) < 3:
+            with _state_lock:
+                ctx["answers"] = answers
+                conv["clarification_context"] = ctx
             send_whatsapp(
                 incoming_number,
                 _luis2.get("zeli_message") or "¿Puedes darme más detalles sobre la pieza?",
@@ -1867,9 +1873,10 @@ def _webhook_handler():
             # Done clarifying — move to confirming
             if parsed_req and answers:
                 parsed_req["clarification_answers"] = answers
-            conv["clarifying"]            = False
-            conv["clarification_context"] = None
-            conv["confirming"]            = True
+            with _state_lock:
+                conv["clarifying"]            = False
+                conv["clarification_context"] = None
+                conv["confirming"]            = True
 
             if _luis2 and _luis2.get("ronel_flag") and _luis2.get("ronel_note"):
                 _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
@@ -1892,7 +1899,8 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 6.5 CONFIRMING → customer confirming or correcting their queued request
-    conv = conversations.get(incoming_number)
+    with _state_lock:
+        conv = conversations.get(incoming_number)
     if conv and conv.get("confirming"):
         affirmative = _is_affirmative(incoming_message)
 
@@ -1955,7 +1963,8 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 6.6 SHARED VEHICLE QUESTION → yes = same vehicle, no = per-item
-    conv = conversations.get(incoming_number)
+    with _state_lock:
+        conv = conversations.get(incoming_number)
     if conv and conv.get("asking_shared_vehicle"):
         if is_goodbye(incoming_message):
             _close_conversation(incoming_number, mid_flow=True)
@@ -1979,7 +1988,8 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 6.7 PER-ITEM VEHICLE COLLECTION → one vehicle per part
-    conv = conversations.get(incoming_number)
+    with _state_lock:
+        conv = conversations.get(incoming_number)
     if conv and conv.get("asking_per_item"):
         if is_goodbye(incoming_message):
             _close_conversation(incoming_number, mid_flow=True)
