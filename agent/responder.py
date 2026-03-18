@@ -224,12 +224,16 @@ def _resolved_part(req: dict) -> str:
 
 def _customer_urgency_line(req: dict) -> str:
     urgency = req.get("urgency")
-    if urgency == "urgente":
+    if urgency in {"same_day", "urgente"}:
         return "⏱️ Hoy mismo"
-    if urgency == "manana":
+    if urgency in {"1_day", "manana"}:
         return "⏱️ Para mañana"
-    if urgency == "puede_esperar":
-        return "⏱️ Puede esperar 1-2 días"
+    if urgency in {"2_plus_days", "puede_esperar"}:
+        return "⏱️ En 2+ días"
+    if urgency == "1_week":
+        return "⏱️ En 1 semana"
+    if urgency == "2_plus_weeks":
+        return "⏱️ En 2+ semanas"
     return ""
 
 

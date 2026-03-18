@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import re
 import traceback
 import hmac
 import hashlib
@@ -70,15 +71,26 @@ active_seller_sessions_ts = {}      # seller_number → last_activity epoch (flo
 CATALOGUE_INDEX: list = []
 
 # Urgency detection phrase lists
-_URGENCY_NOW    = ["hoy", "urgente", "ya", "ahora", "lo antes posible"]
-_URGENCY_TOMORROW = ["mañana", "manana"]
-_URGENCY_WAIT   = ["esperar", "1-2", "días", "dias", "no urgente", "puede esperar"]
+_URGENCY_SAME_DAY = ["hoy", "urgente", "ya", "ahora", "lo antes posible", "mismo dia", "mismo día"]
+_URGENCY_1_DAY = ["mañana", "manana", "1 dia", "1 día", "un dia", "un día", "dia siguiente", "día siguiente", "24 horas"]
+_URGENCY_2_PLUS_DAYS = ["1-2", "2 dias", "2 días", "3 dias", "3 días", "4 dias", "4 días", "varios dias", "varios días", "unos dias", "unos días", "puede esperar"]
+_URGENCY_1_WEEK = ["1 semana", "una semana", "7 dias", "7 días"]
+_URGENCY_2_PLUS_WEEKS = ["2 semanas", "3 semanas", "4 semanas", "2+ semanas", "mas de 2 semanas", "más de 2 semanas", "varias semanas"]
 _URGENCY_CANCEL = [
     "no nada", "ya no", "no gracias", "dejalo", "déjalo",
     "olvídalo", "olvidalo", "no quiero", "cancelar", "cancela",
     "no necesito", "ya no lo necesito",
 ]
 _URGENCY_TTL    = 7200  # seconds — expire pending_urgency state after 2 hours
+_URGENCY_PROMPT = (
+    "⏱️ ¿En qué plazo la necesitas?\n"
+    "Responde con número o texto:\n"
+    "1) Hoy mismo\n"
+    "2) En 1 día (mañana)\n"
+    "3) En 2+ días\n"
+    "4) En 1 semana\n"
+    "5) En 2+ semanas"
+)
 # pending_urgency payload may include:
 # - awaiting_confirmation: True when urgency is already captured and we're waiting
 #   for the final "sí / corrígeme" confirmation before owner briefing.
@@ -95,16 +107,66 @@ def _start_urgency_step(customer_number: str, raw_message: str, queue: list) -> 
     }
     send_whatsapp(
         customer_number,
-        "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
+        _URGENCY_PROMPT
     )
 
 
 def _format_urgency_label(value: str) -> str:
+    if value == "same_day":
+        return "🔴 Hoy mismo"
+    if value == "1_day":
+        return "🟠 En 1 día (mañana)"
+    if value == "2_plus_days":
+        return "🟡 En 2+ días"
+    if value == "1_week":
+        return "🔵 En 1 semana"
+    if value == "2_plus_weeks":
+        return "🟣 En 2+ semanas"
+    # Backward-compatibility for older urgency values already present in memory/logs.
     if value == "urgente":
-        return "🔴 Urgente — necesita hoy"
+        return "🔴 Hoy mismo"
     if value == "manana":
-        return "🟠 Puede esperar hasta mañana (1 día)"
-    return "🟡 Puede esperar 1-2 días"
+        return "🟠 En 1 día (mañana)"
+    if value == "puede_esperar":
+        return "🟡 En 2+ días"
+    return value or "—"
+
+
+def _classify_urgency(msg_lower: str) -> str | None:
+    msg = msg_lower.strip()
+    if msg in {"1", "1.", "hoy"}:
+        return "same_day"
+    if msg in {"2", "2.", "1 dia", "1 día", "un dia", "un día"}:
+        return "1_day"
+    if msg in {"3", "3.", "2 dias", "2 días", "3 dias", "3 días"}:
+        return "2_plus_days"
+    if msg in {"4", "4.", "1 semana", "una semana"}:
+        return "1_week"
+    if msg in {"5", "5.", "2 semanas", "2+ semanas"}:
+        return "2_plus_weeks"
+
+    if any(p in msg for p in _URGENCY_SAME_DAY):
+        return "same_day"
+    if any(p in msg for p in _URGENCY_1_DAY):
+        return "1_day"
+
+    # Numeric guards (e.g., "2 dias", "10 días", "3 semanas").
+    if re.search(r"\b([2-9]|\d{2,})\s*semanas?\b", msg):
+        return "2_plus_weeks"
+    if re.search(r"\b(1|una)\s*semana\b", msg):
+        return "1_week"
+    if re.search(r"\b([2-9]|\d{2,})\s*d[ií]as?\b", msg):
+        return "2_plus_days"
+    if re.search(r"\b(1|un)\s*d[ií]a\b", msg):
+        return "1_day"
+
+    if any(p in msg for p in _URGENCY_2_PLUS_WEEKS):
+        return "2_plus_weeks"
+    if any(p in msg for p in _URGENCY_1_WEEK):
+        return "1_week"
+    if any(p in msg for p in _URGENCY_2_PLUS_DAYS):
+        return "2_plus_days"
+    return None
 # Maps seller_number → owner session context
 # { "+507...": { "name": "Luis", "started_at": "..." } }
 seller_message_map     = {}
@@ -1843,7 +1905,7 @@ def _webhook_handler():
                         conv["confirming"] = False
                 _send_owner_briefing(incoming_number, raw, queue)
                 req = queue[0] if queue else {}
-                if req.get("urgency") == "urgente":
+                if req.get("urgency") == "same_day":
                     msg_sid = send_whatsapp(
                         owner_number,
                         f"⚡ *Sourcing Urgente — Live Mode*\n"
@@ -1882,9 +1944,7 @@ def _webhook_handler():
             any(p in msg_lower for p in _URGENCY_CANCEL)
             or msg_lower in {"no", "nada"}
         )
-        is_urgent = any(p in msg_lower for p in _URGENCY_NOW)
-        is_tomorrow = any(p in msg_lower for p in _URGENCY_TOMORROW)
-        can_wait  = any(p in msg_lower for p in _URGENCY_WAIT)
+        urgency_value = _classify_urgency(msg_lower)
 
         if is_cancel:
             pending_urgency.pop(incoming_number, None)
@@ -1906,31 +1966,10 @@ def _webhook_handler():
             )
             return jsonify({"status": "ok"}), 200
 
-        if is_urgent:
+        if urgency_value or urgency_data["attempts"] >= 1:
+            normalized_urgency = urgency_value or "2_plus_days"
             for _req in queue:
-                _req["urgency"] = "urgente"
-            urgency_data["awaiting_confirmation"] = True
-            with _state_lock:
-                conv = conversations.get(incoming_number)
-                if conv:
-                    conv["confirming"] = True
-            send_whatsapp(incoming_number, generate_queue_confirmation(queue))
-            return jsonify({"status": "ok"}), 200
-
-        if is_tomorrow:
-            for _req in queue:
-                _req["urgency"] = "manana"
-            urgency_data["awaiting_confirmation"] = True
-            with _state_lock:
-                conv = conversations.get(incoming_number)
-                if conv:
-                    conv["confirming"] = True
-            send_whatsapp(incoming_number, generate_queue_confirmation(queue))
-            return jsonify({"status": "ok"}), 200
-
-        if can_wait or urgency_data["attempts"] >= 1:
-            for _req in queue:
-                _req["urgency"] = "puede_esperar"
+                _req["urgency"] = normalized_urgency
             urgency_data["awaiting_confirmation"] = True
             with _state_lock:
                 conv = conversations.get(incoming_number)
@@ -1943,7 +1982,7 @@ def _webhook_handler():
         urgency_data["attempts"] += 1
         send_whatsapp(
             incoming_number,
-            "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
+            _URGENCY_PROMPT
         )
         return jsonify({"status": "ok"}), 200
 
@@ -2022,17 +2061,7 @@ def _webhook_handler():
             conv["state"]      = ConversationState.WAITING
             queue = list(conv["request_queue"])
             conv["request_queue"] = []
-
-            pending_urgency[incoming_number] = {
-                "queue":       queue,
-                "raw_message": incoming_message,
-                "attempts":    0,
-                "created_at":  time.time(),
-            }
-            send_whatsapp(
-                incoming_number,
-                "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
-            )
+            _start_urgency_step(incoming_number, incoming_message, queue)
             return jsonify({"status": "ok"}), 200
 
         else:
