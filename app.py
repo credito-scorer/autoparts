@@ -71,7 +71,8 @@ CATALOGUE_INDEX: list = []
 
 # Urgency detection phrase lists
 _URGENCY_NOW    = ["hoy", "urgente", "ya", "ahora", "lo antes posible"]
-_URGENCY_WAIT   = ["esperar", "1-2", "días", "dias", "mañana", "no urgente", "puede esperar"]
+_URGENCY_TOMORROW = ["mañana", "manana"]
+_URGENCY_WAIT   = ["esperar", "1-2", "días", "dias", "no urgente", "puede esperar"]
 _URGENCY_CANCEL = [
     "no nada", "ya no", "no gracias", "dejalo", "déjalo",
     "olvídalo", "olvidalo", "no quiero", "cancelar", "cancela",
@@ -96,6 +97,14 @@ def _start_urgency_step(customer_number: str, raw_message: str, queue: list) -> 
         customer_number,
         "🔧 ¿La necesitas hoy mismo o puedes esperar 1-2 días para conseguirla?"
     )
+
+
+def _format_urgency_label(value: str) -> str:
+    if value == "urgente":
+        return "🔴 Urgente — necesita hoy"
+    if value == "manana":
+        return "🟠 Puede esperar hasta mañana (1 día)"
+    return "🟡 Puede esperar 1-2 días"
 # Maps seller_number → owner session context
 # { "+507...": { "name": "Luis", "started_at": "..." } }
 seller_message_map     = {}
@@ -596,10 +605,7 @@ def _send_owner_briefing(number: str, message: str, queue: list) -> None:
         _urgency = req.get("urgency")
         _urgency_block = ""
         if _urgency:
-            _urgency_label = (
-                "🔴 Urgente — necesita hoy" if _urgency == "urgente"
-                else "🟡 Puede esperar 1-2 días"
-            )
+            _urgency_label = _format_urgency_label(_urgency)
             _urgency_block = f"⏱️ Urgencia: {_urgency_label}\n\n"
 
         # ── Luis block (appended after parser if Luis data is present) ──────
@@ -1877,6 +1883,7 @@ def _webhook_handler():
             or msg_lower in {"no", "nada"}
         )
         is_urgent = any(p in msg_lower for p in _URGENCY_NOW)
+        is_tomorrow = any(p in msg_lower for p in _URGENCY_TOMORROW)
         can_wait  = any(p in msg_lower for p in _URGENCY_WAIT)
 
         if is_cancel:
@@ -1902,6 +1909,17 @@ def _webhook_handler():
         if is_urgent:
             for _req in queue:
                 _req["urgency"] = "urgente"
+            urgency_data["awaiting_confirmation"] = True
+            with _state_lock:
+                conv = conversations.get(incoming_number)
+                if conv:
+                    conv["confirming"] = True
+            send_whatsapp(incoming_number, generate_queue_confirmation(queue))
+            return jsonify({"status": "ok"}), 200
+
+        if is_tomorrow:
+            for _req in queue:
+                _req["urgency"] = "manana"
             urgency_data["awaiting_confirmation"] = True
             with _state_lock:
                 conv = conversations.get(incoming_number)

@@ -188,6 +188,62 @@ class CriticalFlowTests(unittest.TestCase):
         owner_briefing_mock.assert_called_once()
         send_catalogue_mock.assert_not_called()
 
+    def test_tomorrow_urgency_is_preserved_and_shown_in_summary(self):
+        customer = "+50760002222"
+        queue = [{
+            "part": "Alternador",
+            "make": "Toyota",
+            "model": "Hilux",
+            "year": "2008",
+        }]
+        app_module.pending_urgency[customer] = {
+            "queue": queue,
+            "raw_message": "alternador hilux 2008",
+            "attempts": 0,
+            "created_at": app_module.time.time(),
+            "awaiting_confirmation": False,
+        }
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.urgency.tomorrow",
+                            "from": customer.replace("+", ""),
+                            "type": "text",
+                            "text": {"body": "mañana esta bien"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        sent_messages = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent_messages.append((to, msg))
+            return "sid_text"
+
+        with patch.object(app_module, "send_whatsapp", side_effect=_fake_send_whatsapp):
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(queue[0].get("urgency"), "manana")
+        self.assertTrue(any("Para mañana" in msg for _, msg in sent_messages))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -222,71 +222,50 @@ def _resolved_part(req: dict) -> str:
     return (req.get("luis") or {}).get("part_identified") or req.get("part") or "?"
 
 
+def _customer_urgency_line(req: dict) -> str:
+    urgency = req.get("urgency")
+    if urgency == "urgente":
+        return "⏱️ Hoy mismo"
+    if urgency == "manana":
+        return "⏱️ Para mañana"
+    if urgency == "puede_esperar":
+        return "⏱️ Puede esperar 1-2 días"
+    return ""
+
+
 def generate_queue_confirmation(requests: list) -> str:
     """Generate a confirmation summary for one or more queued requests."""
     if len(requests) == 1:
-        req   = requests[0]
+        req = requests[0]
         print(f"🐛 [generate_queue_confirmation] req keys={list(req.keys())} clarification_answers={req.get('clarification_answers')!r}")
-        part  = _resolved_part(req)
+        part = _resolved_part(req)
         make  = req.get("make", "?")
         model = req.get("model", "?")
         year  = req.get("year", "?")
         _specs = req.get("clarification_answers", [])
-        if _specs:
-            # Fixed-format template — don't ask Haiku to render specs, do it deterministically
-            _specs_str = " | ".join(s.capitalize() for s in _specs)
-            return (
-                f"🔧 {part}\n"
-                f"🚗 {make} {model} {year}\n"
-                f"⚙️ {_specs_str}\n\n"
-                f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
-            )
-        instruction = (
-            f"Genera un resumen de confirmación del pedido para el cliente. "
-            f"Pieza: {part}. Vehículo: {make} {model} {year}. "
-            f"Usa 🔩 para la pieza y 🚗 para el vehículo. "
-            f"Pide que confirmen con 'sí' o que corrijan lo que esté mal. "
-            f"Sé claro y conciso. No uses frases largas."
-        )
-    else:
-        lines = "\n".join(
-            f"🔩 {_resolved_part(r)} — {r.get('make')} {r.get('model')} {r.get('year')}"
-            for r in requests
-        )
-        instruction = (
-            f"El cliente pidió estas piezas:\n{lines}\n\n"
-            f"Genera un resumen de confirmación del pedido completo. "
-            f"Lista cada pieza con 🔩. Pide que confirmen con 'sí' o corrijan lo que esté mal. "
-            f"Sé conciso, máximo 4 líneas."
-        )
-
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": instruction + LANGUAGE_GUARD}]
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        print(f"⚠️ generate_queue_confirmation error: {e}")
-        alert_claude_error(e, "responder.generate_queue_confirmation")
-        if len(requests) == 1:
-            req = requests[0]
-            _specs = req.get("clarification_answers", [])
-            _specs_line = f"\n⚙️ {' | '.join(_specs)}" if _specs else ""
-            return (
-                f"🔩 {_resolved_part(req)} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}{_specs_line}\n\n"
-                f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
-            )
-        lines = "\n".join(
-            f"🔩 {_resolved_part(r)} — {r.get('make')} {r.get('model')} {r.get('year')}"
-            for r in requests
-        )
+        _urgency = _customer_urgency_line(req)
+        _specs_line = f"⚙️ {' | '.join(s.capitalize() for s in _specs)}\n" if _specs else ""
+        _urgency_line = f"{_urgency}\n" if _urgency else ""
         return (
-            f"Confirmemos tu pedido:\n\n{lines}\n\n"
+            f"🔧 {part}\n"
+            f"🚗 {make} {model} {year}\n"
+            f"{_specs_line}"
+            f"{_urgency_line}\n"
             f"¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
         )
+
+    lines = []
+    for req in requests:
+        urgency_line = _customer_urgency_line(req)
+        suffix = f" — {urgency_line}" if urgency_line else ""
+        lines.append(
+            f"🔩 {_resolved_part(req)} — 🚗 {req.get('make')} {req.get('model')} {req.get('year')}{suffix}"
+        )
+    return (
+        "Confirmemos tu pedido:\n\n"
+        + "\n".join(lines)
+        + "\n\n¿Todo correcto? Responde *sí* o corrígeme lo que esté mal."
+    )
 
 
 def generate_multi_sourcing_summary(
