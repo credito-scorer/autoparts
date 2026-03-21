@@ -549,7 +549,8 @@
     const conv  = conversations[num];
     if (!conv) return;
 
-    document.getElementById('chatEmpty').style.display = 'none';
+    const chatEmptyEl = document.getElementById('chatEmpty');
+    if (chatEmptyEl) chatEmptyEl.style.display = 'none';
 
     // Get or create persistent chat header + messages container
     let hdrEl  = panel.querySelector('.chat-hdr');
@@ -559,7 +560,6 @@
     if (isNewChat) {
       // Clear and rebuild for new conversation
       panel.innerHTML = '';
-      document.getElementById('chatEmpty').style.display = 'none'; // it was removed
 
       hdrEl = document.createElement('div');
       hdrEl.className = 'chat-hdr';
