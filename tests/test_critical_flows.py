@@ -470,6 +470,50 @@ class CriticalFlowTests(unittest.TestCase):
 
         briefing_mock.assert_not_called()
 
+    def test_realestate_timeline_followup_advances_and_avoids_internal_tone(self):
+        customer = "+50760111111"
+        repeated = "Buenísimo, con esa información te puedo orientar mejor. ¿Para cuándo quisieras concretar compra o visita?"
+        re_module.re_conversations[customer] = {
+            "history": [
+                {"role": "user", "content": "10 mil con banco"},
+                {"role": "assistant", "content": repeated},
+            ],
+            "intent_score": "considering",
+            "extracted": {
+                "name": None,
+                "budget": "$10,000",
+                "financing": "con banco",
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 3,
+            "last_notified_score": 3,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        sent = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent.append((to, msg))
+            return "sid_text"
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": repeated,
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+        }), patch.object(re_module, "send_whatsapp", side_effect=_fake_send_whatsapp), \
+             patch.object(re_module, "send_owner_re_briefing") as briefing_mock:
+            re_module.process_realestate_lead(customer, "la proxima semana puede ser no se")
+
+        self.assertTrue(sent)
+        reply = sent[-1][1].lower()
+        self.assertNotIn("perfil", reply)
+        self.assertIn("compartes tu nombre", reply)
+        self.assertEqual(re_module.re_conversations[customer]["extracted"]["timeline"], "corto plazo")
+        briefing_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

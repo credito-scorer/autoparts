@@ -165,7 +165,11 @@ def _extract_financing_from_message(message: str) -> str | None:
 
 def _extract_timeline_from_message(message: str) -> str | None:
     msg = (message or "").lower()
-    if any(k in msg for k in ("ya", "pronto", "esta semana", "esta quincena", "este mes")):
+    if any(k in msg for k in (
+        "ya", "pronto", "esta semana", "esta quincena", "este mes",
+        "la proxima semana", "la próxima semana", "proxima semana", "próxima semana",
+        "la semana que viene", "semana que viene", "la otra semana", "puede ser"
+    )):
         return "corto plazo"
     if any(k in msg for k in ("mes que viene", "próximo mes", "proximo mes", "más adelante", "mas adelante")):
         return "mediano plazo"
@@ -225,7 +229,7 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
         )
     if extracted.get("budget") and extracted.get("financing") and not extracted.get("timeline"):
         return (
-            "Buenísimo, con ese perfil te puedo orientar mejor. "
+            "Buenísimo, con esa información te puedo orientar mejor. "
             "¿Para cuándo quisieras concretar compra o visita?"
         )
 
@@ -235,7 +239,10 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
         return "Buenísimo. ¿Planeas comprar al contado o con financiamiento bancario?"
     if not extracted.get("timeline"):
         return "Entendido. ¿Para cuándo te gustaría concretar la compra?"
-    return "Excelente. ¿Prefieres que te comparta primero opciones por precio o por metraje?"
+    return (
+        "Perfecto. Si quieres, te comparto las opciones que mejor encajan con tu presupuesto "
+        "y coordinamos visita. ¿Me compartes tu nombre?"
+    )
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
