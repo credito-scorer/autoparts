@@ -4,6 +4,7 @@ Real estate lead qualifier for Zeli — Lotes La Coloradita, Santiago, Veraguas.
 import os
 import json
 import time
+import re
 from datetime import datetime
 
 from anthropic import Anthropic
@@ -63,6 +64,9 @@ CRITICAL BEHAVIOR:
   and at least one standout feature (size range, title, utilities, or access).
 - Do NOT respond with only an open question like "¿Qué te gustaría saber?" on first contact.
 - Inform first, then ask a focused qualifier question (e.g., budget, financing, timeline).
+- On follow-up messages, acknowledge the user's latest answer and move the conversation
+  forward with the next specific question.
+- Never repeat your previous assistant message verbatim.
 
 SCORING:
   browsing       — general curiosity, no urgency
@@ -99,6 +103,58 @@ def _fmt(val, fallback: str = "No mencionado") -> str:
     if isinstance(val, list):
         return ", ".join(val) if val else fallback
     return str(val)
+
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\wáéíóúñü]+", " ", (s or "").lower())).strip()
+
+
+def _last_assistant_message(history: list) -> str:
+    for item in reversed(history):
+        if item.get("role") == "assistant":
+            return item.get("content", "")
+    return ""
+
+
+def _looks_repetitive(reply: str, history: list) -> bool:
+    last_assistant = _last_assistant_message(history)
+    if not last_assistant:
+        return False
+    return _norm_text(reply) == _norm_text(last_assistant)
+
+
+def _progressive_followup_reply(message: str, extracted: dict) -> str:
+    msg = (message or "").lower()
+    if "constru" in msg:
+        return (
+            "¡Excelente, para construir te puede funcionar muy bien! "
+            "Tenemos lotes de 600-700 m² con título de propiedad. "
+            "¿Qué presupuesto manejas y comprarías al contado o con banco?"
+        )
+    if "invers" in msg:
+        return (
+            "Perfecto, como inversión es una zona con buen acceso en La Coloradita. "
+            "Hoy tenemos 9 lotes disponibles desde $15,004. "
+            "¿Qué rango de presupuesto te gustaría evaluar?"
+        )
+    if any(k in msg for k in ("cuanto", "cuánto", "precio", "precios", "costo", "cuesta")):
+        return (
+            "Los lotes están entre $15,004 y $17,502 según metraje (600-700 m²). "
+            "Si quieres, te paso las mejores opciones según tu presupuesto."
+        )
+    if any(k in msg for k in ("agua", "luz", "electric", "internet", "servicio")):
+        return (
+            "Sí: los lotes tienen agua y electricidad; internet aún no. "
+            "¿Te interesa más para construir pronto o para inversión?"
+        )
+
+    if not extracted.get("budget"):
+        return "Perfecto. Para orientarte mejor, ¿qué presupuesto tienes en mente para el lote?"
+    if not extracted.get("financing"):
+        return "Buenísimo. ¿Planeas comprar al contado o con financiamiento bancario?"
+    if not extracted.get("timeline"):
+        return "Entendido. ¿Para cuándo te gustaría concretar la compra?"
+    return "Excelente. ¿Prefieres que te comparta primero opciones por precio o por metraje?"
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -206,6 +262,9 @@ def process_realestate_lead(number: str, message: str) -> None:
             if q not in existing:
                 existing.append(q)
         stored["specific_questions"] = existing
+
+    if _looks_repetitive(reply, conv["history"]):
+        reply = _progressive_followup_reply(message, stored)
 
     prev_score        = conv["intent_score"]
     conv["intent_score"] = score

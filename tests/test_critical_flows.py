@@ -12,6 +12,7 @@ os.environ["YOUR_PERSONAL_WHATSAPP"] = ""
 os.environ["META_APP_SECRET"] = "test_secret"
 
 import app as app_module
+import agent.realestate as re_module
 
 
 class CriticalFlowTests(unittest.TestCase):
@@ -363,6 +364,49 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         exploratory_mock.assert_called_once_with(customer, "me explicas mejor")
         classify_mock.assert_not_called()
+
+    def test_realestate_followup_does_not_repeat_previous_reply(self):
+        customer = "+50760008888"
+        repeated = (
+            "¡Claro! Tenemos 9 lotes disponibles en La Coloradita, Santiago, "
+            "desde $15,004 hasta $17,502 (600-700 m²), con título de propiedad "
+            "y acceso asfaltado. ¿Buscas para construir pronto o como inversión?"
+        )
+        re_module.re_conversations[customer] = {
+            "history": [
+                {"role": "user", "content": "interesado en un lote"},
+                {"role": "assistant", "content": repeated},
+            ],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        sent = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent.append((to, msg))
+            return "sid_text"
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": repeated,
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+        }), patch.object(re_module, "send_whatsapp", side_effect=_fake_send_whatsapp):
+            re_module.process_realestate_lead(customer, "para construir")
+
+        self.assertTrue(sent)
+        reply = sent[-1][1]
+        self.assertNotEqual(reply, repeated)
+        self.assertIn("presupuesto", reply.lower())
 
 
 if __name__ == "__main__":
