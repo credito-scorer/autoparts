@@ -57,6 +57,13 @@ YOUR JOB:
 3. Extract: name, budget, financing situation, timeline, specific questions.
 4. Score intent as browsing, considering, or ready_to_visit.
 
+CRITICAL BEHAVIOR:
+- When the customer first mentions lots/terrenos/property, your FIRST reply must
+  include concrete value from inventory: location, price range, available lot count,
+  and at least one standout feature (size range, title, utilities, or access).
+- Do NOT respond with only an open question like "¿Qué te gustaría saber?" on first contact.
+- Inform first, then ask a focused qualifier question (e.g., budget, financing, timeline).
+
 SCORING:
   browsing       — general curiosity, no urgency
   considering    — asking specifics (price, title, financing, size), comparing options
@@ -111,7 +118,11 @@ def qualify_lead(number: str, message: str, history: list) -> dict:
     except json.JSONDecodeError as e:
         print(f"⚠️ qualify_lead JSON decode error: {e}")
         return {
-            "reply": "Claro, con gusto te ayudo con información sobre los lotes. ¿Qué te gustaría saber?",
+            "reply": (
+                "¡Claro! Tenemos 9 lotes disponibles en La Coloradita, Santiago, "
+                "desde $15,004 hasta $17,502 (600-700 m²), con título de propiedad "
+                "y acceso asfaltado. ¿Buscas para construir pronto o como inversión?"
+            ),
             "intent_score": "browsing",
             "extracted": {"name": None, "budget": None, "financing": None,
                           "timeline": None, "specific_questions": []},
@@ -120,7 +131,11 @@ def qualify_lead(number: str, message: str, history: list) -> dict:
     except Exception as e:
         print(f"⚠️ qualify_lead error: {e}")
         return {
-            "reply": "Claro, con gusto te ayudo con información sobre los lotes. ¿Qué te gustaría saber?",
+            "reply": (
+                "¡Claro! Tenemos 9 lotes disponibles en La Coloradita, Santiago, "
+                "desde $15,004 hasta $17,502 (600-700 m²), con título de propiedad "
+                "y acceso asfaltado. ¿Buscas para construir pronto o como inversión?"
+            ),
             "intent_score": "browsing",
             "extracted": {"name": None, "budget": None, "financing": None,
                           "timeline": None, "specific_questions": []},

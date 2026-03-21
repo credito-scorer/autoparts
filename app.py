@@ -6,6 +6,7 @@ import traceback
 import hmac
 import hashlib
 import threading
+from datetime import datetime
 from enum import Enum
 from flask import Flask, request, jsonify, make_response, redirect, send_from_directory
 from dotenv import load_dotenv
@@ -44,8 +45,15 @@ from connectors.local_store import (
 from beta_discovery import is_beta_user, handle_beta_message, get_beta_whitelist
 from connectors.sellers import is_seller, get_seller_name, get_seller_number_by_name
 from agent.intent import classify_intent
-from agent.realestate import process_realestate_lead, re_briefing_map as _re_briefing_map
-from agent.exploratory import process_exploratory
+from agent.realestate import (
+    process_realestate_lead,
+    re_briefing_map as _re_briefing_map,
+    re_conversations as _re_conversations,
+)
+from agent.exploratory import (
+    process_exploratory,
+    exploratory_conversations as _exploratory_conversations,
+)
 
 load_dotenv()
 
@@ -534,6 +542,18 @@ def _is_affirmative(message: str) -> bool:
         "sí", "si", "dale", "ok", "okey", "claro", "correcto", "sip", "listo",
         "bien", "ta bien", "está bien", "esta bien"
     ))
+
+
+def _is_vertical_conv_stale(conv: dict, ttl_seconds: int = 86400) -> bool:
+    """Return True when a vertical conversation is older than the TTL."""
+    last = conv.get("last_message_at")
+    if not last:
+        return False
+    try:
+        last_ts = datetime.fromisoformat(str(last)).timestamp()
+    except Exception:
+        return False
+    return (time.time() - last_ts) > ttl_seconds
 
 
 # ── Escalation helper ──────────────────────────────────────────────────────────
@@ -2235,7 +2255,36 @@ def _webhook_handler():
 
         return jsonify({"status": "ok"}), 200
 
-    # 7. ALL OTHER MESSAGES → classify intent, then route to correct vertical
+    # 7. ALL OTHER MESSAGES → active vertical context first, then fresh classify
+    re_conv = _re_conversations.get(incoming_number)
+    if re_conv:
+        if _is_vertical_conv_stale(re_conv):
+            _re_conversations.pop(incoming_number, None)
+        else:
+            thread = threading.Thread(
+                target=process_realestate_lead,
+                args=(incoming_number, incoming_message),
+                daemon=True,
+            )
+            thread.daemon = True
+            thread.start()
+            return jsonify({"status": "ok"}), 200
+
+    exploratory_conv = _exploratory_conversations.get(incoming_number)
+    if exploratory_conv:
+        if _is_vertical_conv_stale(exploratory_conv):
+            _exploratory_conversations.pop(incoming_number, None)
+        else:
+            thread = threading.Thread(
+                target=process_exploratory,
+                args=(incoming_number, incoming_message),
+                daemon=True,
+            )
+            thread.daemon = True
+            thread.start()
+            return jsonify({"status": "ok"}), 200
+
+    # No active vertical context — classify fresh
     intent = classify_intent(incoming_message)
     print(f"🧭 Intent classified as '{intent}' for {incoming_number}: {incoming_message[:60]!r}")
 
