@@ -43,6 +43,9 @@ from connectors.local_store import (
 )
 from beta_discovery import is_beta_user, handle_beta_message, get_beta_whitelist
 from connectors.sellers import is_seller, get_seller_name, get_seller_number_by_name
+from agent.intent import classify_intent
+from agent.realestate import process_realestate_lead, re_briefing_map as _re_briefing_map
+from agent.exploratory import process_exploratory
 
 load_dotenv()
 
@@ -1014,7 +1017,7 @@ def process_customer_request(number: str, message: str) -> None:
         if is_human_request(message):
             _handle_human_escalation(number, message)
         elif is_greeting(message):
-            send_whatsapp(number, generate_response("greeting", message))
+            send_whatsapp(number, "👋 ¡Hola! Somos *Zeli*. Dinos, ¿en qué te puedo ayudar?")
         elif is_secondary_greeting(message):
             send_whatsapp(number, generate_response("secondary_greeting", message))
         elif is_wait(message):
@@ -1602,6 +1605,16 @@ def _webhook_handler():
                     "owner_notes":     texto,
                 })
                 return jsonify({"status": "ok"}), 200
+
+        # Reply to a real estate lead briefing → forward to lead (Option A: keep chain live)
+        if replied_to_sid and replied_to_sid in _re_briefing_map:
+            re_lead_number = _re_briefing_map.pop(replied_to_sid, None)
+            if re_lead_number:
+                msg_sid = send_whatsapp(re_lead_number, f"💬 *Zeli:*\n{incoming_message}")
+                if msg_sid:
+                    _re_briefing_map[msg_sid] = re_lead_number  # keep chain alive
+            send_whatsapp(owner_number, "✅ Mensaje enviado al lead de terreno.")
+            return jsonify({"status": "ok"}), 200
 
         # Reply to a live session / escalation message
         customer_number = None
@@ -2222,11 +2235,29 @@ def _webhook_handler():
 
         return jsonify({"status": "ok"}), 200
 
-    # 7. ALL OTHER MESSAGES → process in background
-    def _run_and_untrack():
-        process_customer_request(incoming_number, incoming_message)
+    # 7. ALL OTHER MESSAGES → classify intent, then route to correct vertical
+    intent = classify_intent(incoming_message)
+    print(f"🧭 Intent classified as '{intent}' for {incoming_number}: {incoming_message[:60]!r}")
 
-    thread = threading.Thread(target=_run_and_untrack, daemon=True)
+    if intent == "realestate":
+        thread = threading.Thread(
+            target=process_realestate_lead,
+            args=(incoming_number, incoming_message),
+            daemon=True,
+        )
+    elif intent == "exploratory":
+        thread = threading.Thread(
+            target=process_exploratory,
+            args=(incoming_number, incoming_message),
+            daemon=True,
+        )
+    else:
+        # "autoparts" or "social" — existing flow handles both
+        def _run_and_untrack():
+            process_customer_request(incoming_number, incoming_message)
+        thread = threading.Thread(target=_run_and_untrack, daemon=True)
+
+    thread.daemon = True
     thread.start()
 
     return jsonify({"status": "ok"}), 200
