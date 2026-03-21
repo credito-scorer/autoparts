@@ -109,6 +109,15 @@ def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\wáéíóúñü]+", " ", (s or "").lower())).strip()
 
 
+def _looks_generic_inventory_intro(reply: str) -> bool:
+    text = _norm_text(reply)
+    return (
+        "tenemos 9 lotes disponibles" in text
+        and "la coloradita" in text
+        and "buscas para construir" in text
+    )
+
+
 def _last_assistant_message(history: list) -> str:
     for item in reversed(history):
         if item.get("role") == "assistant":
@@ -121,6 +130,68 @@ def _looks_repetitive(reply: str, history: list) -> bool:
     if not last_assistant:
         return False
     return _norm_text(reply) == _norm_text(last_assistant)
+
+
+def _extract_budget_from_message(message: str) -> str | None:
+    msg = (message or "").lower()
+    # Examples handled: "10k", "$15000", "15,000", "10 mil"
+    m = re.search(r"(?:\$?\s*)?(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(k|mil)?\b", msg)
+    if not m:
+        return None
+    raw_num = m.group(1).replace(",", "").replace(" ", "")
+    suffix = m.group(2)
+    try:
+        amount = float(raw_num)
+    except ValueError:
+        return None
+    if suffix == "k":
+        amount *= 1000
+    elif suffix == "mil" and amount < 1000:
+        amount *= 1000
+    amount_i = int(round(amount))
+    if amount_i < 1000:
+        return None
+    return f"${amount_i:,.0f}"
+
+
+def _extract_financing_from_message(message: str) -> str | None:
+    msg = (message or "").lower()
+    if any(k in msg for k in ("banco", "prestamo", "préstamo", "financ", "letra")):
+        return "con banco"
+    if any(k in msg for k in ("contado", "cash", "efectivo")):
+        return "al contado"
+    return None
+
+
+def _extract_timeline_from_message(message: str) -> str | None:
+    msg = (message or "").lower()
+    if any(k in msg for k in ("ya", "pronto", "esta semana", "esta quincena", "este mes")):
+        return "corto plazo"
+    if any(k in msg for k in ("mes que viene", "próximo mes", "proximo mes", "más adelante", "mas adelante")):
+        return "mediano plazo"
+    return None
+
+
+def _has_visit_or_buy_intent(message: str) -> bool:
+    msg = (message or "").lower()
+    return any(k in msg for k in (
+        "visita", "visitar", "ver el lote", "quiero verlo", "quiero comprar",
+        "comprar", "separar", "apartar", "negociar", "vamos"
+    ))
+
+
+def _compute_lead_score(extracted: dict, message: str) -> tuple[int, bool]:
+    score = 0
+    if extracted.get("budget"):
+        score += 2
+    if extracted.get("financing"):
+        score += 1
+    if extracted.get("timeline"):
+        score += 1
+    visit_intent = _has_visit_or_buy_intent(message)
+    if visit_intent:
+        score += 2
+    return score, visit_intent
 
 
 def _progressive_followup_reply(message: str, extracted: dict) -> str:
@@ -146,6 +217,16 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
         return (
             "Sí: los lotes tienen agua y electricidad; internet aún no. "
             "¿Te interesa más para construir pronto o para inversión?"
+        )
+    if extracted.get("budget") and not extracted.get("financing"):
+        return (
+            f"Perfecto, con {extracted.get('budget')} hay opciones para evaluar. "
+            "¿Comprarías al contado o con banco?"
+        )
+    if extracted.get("budget") and extracted.get("financing") and not extracted.get("timeline"):
+        return (
+            "Buenísimo, con ese perfil te puedo orientar mejor. "
+            "¿Para cuándo quisieras concretar compra o visita?"
         )
 
     if not extracted.get("budget"):
@@ -238,6 +319,8 @@ def process_realestate_lead(number: str, message: str) -> None:
         "intent_score":    "browsing",
         "extracted":       {"name": None, "budget": None, "financing": None,
                             "timeline": None, "specific_questions": []},
+        "lead_score":      0,
+        "last_notified_score": 0,
         "created_at":      now,
         "last_message_at": now,
     })
@@ -263,13 +346,45 @@ def process_realestate_lead(number: str, message: str) -> None:
                 existing.append(q)
         stored["specific_questions"] = existing
 
-    if _looks_repetitive(reply, conv["history"]):
+    # Deterministic extraction to reduce misses on short WhatsApp follow-ups.
+    det_budget = _extract_budget_from_message(message)
+    det_financing = _extract_financing_from_message(message)
+    det_timeline = _extract_timeline_from_message(message)
+    if det_budget:
+        stored["budget"] = det_budget
+    if det_financing:
+        stored["financing"] = det_financing
+    if det_timeline:
+        stored["timeline"] = det_timeline
+
+    lead_score, visit_intent = _compute_lead_score(stored, message)
+    conv["lead_score"] = max(conv.get("lead_score", 0), lead_score)
+
+    # Upgrade intent deterministically when we already have meaningful buyer signals.
+    if visit_intent:
+        score = "ready_to_visit"
+    elif lead_score >= 3 and score == "browsing":
+        score = "considering"
+
+    has_prior_assistant = bool(_last_assistant_message(conv["history"]))
+    if _looks_repetitive(reply, conv["history"]) or (
+        has_prior_assistant and _looks_generic_inventory_intro(reply)
+    ):
         reply = _progressive_followup_reply(message, stored)
 
     prev_score        = conv["intent_score"]
     conv["intent_score"] = score
     conv["history"].append({"role": "user",      "content": message})
     conv["history"].append({"role": "assistant", "content": reply})
+
+    # Update conversation store metadata
+    try:
+        from utils.conversation_store import update_metadata as _update_metadata
+        _update_metadata(number, vertical="realestate", intent_score=score)
+        if stored.get("name"):
+            _update_metadata(number, customer_name=stored["name"])
+    except Exception:
+        pass
 
     # Send reply to customer
     send_whatsapp(number, reply)
@@ -284,13 +399,19 @@ def process_realestate_lead(number: str, message: str) -> None:
         and stored.get("name")
     )
 
-    if notify or score_escalated:
+    deterministic_notify = lead_score >= 3
+    should_notify = notify or score_escalated or (
+        deterministic_notify and lead_score > conv.get("last_notified_score", 0)
+    )
+    if should_notify:
         send_owner_re_briefing(number, {"intent_score": score, "extracted": stored})
+        conv["last_notified_score"] = lead_score
         log_event("realestate_lead_briefed", {
             "customer_number": number,
             "intent_score":    score,
+            "lead_score":      lead_score,
             "extracted":       stored,
             "raw_message":     message,
         })
 
-    print(f"🏠 RE lead {number}: score={score}, notify={notify or score_escalated}")
+    print(f"🏠 RE lead {number}: score={score}, lead_score={lead_score}, notify={should_notify}")

@@ -42,6 +42,13 @@ def send_whatsapp(to: str, message: str) -> str | None:
         resp = _do_request()
         resp.raise_for_status()
         msg_id = resp.json()["messages"][0]["id"]
+        _owner = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
+        if number != _owner:
+            try:
+                from utils.conversation_store import log_message as _log_msg
+                _log_msg("+" + number, "outbound", message)
+            except Exception:
+                pass
         return msg_id
     except Exception as e:
         print(f"❌ Failed to send WhatsApp to {to}: {e}")

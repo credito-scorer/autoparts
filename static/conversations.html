@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeli — Live Conversations</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #07090c;
+    --surface: #0c0f14;
+    --border: #191f2a;
+    --accent: #00d4ff;
+    --green: #00e676;
+    --text: #d8e4f0;
+    --text-dim: #5a6a7a;
+    --text-muted: #2a3a4a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  .hdr {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    min-height: 48px;
+  }
+
+  .hdr-back {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px 4px 0;
+    white-space: nowrap;
+  }
+
+  .hdr-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .hdr-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .status-dot.err { background: #ff4444; }
+
+  /* ── Main layout ── */
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 300px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    gap: 8px;
+    padding: 32px;
+  }
+  .sidebar-empty .icon { font-size: 28px; }
+  .sidebar-empty p { font-family: 'Space Mono', monospace; font-size: 10px; text-align: center; }
+
+  .conv-item {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+    border-left: 3px solid transparent;
+  }
+  .conv-item:hover { background: #0f141a; }
+  .conv-item.active { background: #101620; border-left-color: var(--accent); }
+
+  .conv-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+  }
+
+  .conv-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .new-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .conv-time {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .conv-preview {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+
+  .conv-badges { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+
+  /* ── Badges ── */
+  .badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .b-autoparts   { background: #00253a; color: #00b4d8; }
+  .b-realestate  { background: #3a1010; color: #ff6b6b; }
+  .b-exploratory { background: #1e1030; color: #9b5de5; }
+  .b-social      { background: #0f2010; color: #66bb6a; }
+  .b-unknown     { background: #141a22; color: var(--text-dim); }
+  .b-browsing    { background: #141a22; color: var(--text-dim); }
+  .b-considering { background: #2a1e08; color: #f4a261; }
+  .b-ready       { background: #081e10; color: var(--green); }
+
+  /* ── Chat panel ── */
+  .chat-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .chat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    gap: 8px;
+  }
+  .chat-empty .icon { font-size: 32px; }
+  .chat-empty p { font-family: 'Space Mono', monospace; font-size: 11px; }
+
+  .chat-hdr {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .chat-hdr-name { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  .chat-hdr-sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .chat-msgs {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .bwrap { display: flex; }
+  .bwrap.in  { justify-content: flex-start; }
+  .bwrap.out { justify-content: flex-end; }
+
+  .bubble {
+    max-width: 72%;
+    padding: 7px 11px 5px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .bubble.in  {
+    background: #1c2530;
+    color: var(--text);
+    border-bottom-left-radius: 2px;
+  }
+  .bubble.out {
+    background: #005c4b;
+    color: #e9edef;
+    border-bottom-right-radius: 2px;
+  }
+
+  .btime {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: rgba(200,220,240,0.35);
+    text-align: right;
+    margin-top: 3px;
+  }
+  .bubble.in .btime { text-align: left; }
+
+  /* ── Login overlay ── */
+  .login-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .login-overlay.hidden { display: none; }
+
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 32px;
+    width: min(320px, 90vw);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .login-logo {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 5px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .login-box h2 { font-size: 14px; font-weight: 700; }
+  .login-box p  { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-dim); }
+
+  .login-input {
+    background: #060810;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    border-radius: 2px;
+    outline: none;
+    width: 100%;
+  }
+  .login-input:focus { border-color: var(--accent); }
+
+  .login-btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 10px;
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .login-btn:hover { opacity: 0.85; }
+
+  .login-err {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: #ff6b6b;
+    display: none;
+  }
+
+  /* ── Mobile ── */
+  @media (max-width: 768px) {
+    .sidebar { width: 100%; }
+    .chat-panel { display: none; width: 100%; }
+
+    body.show-chat .sidebar { display: none; }
+    body.show-chat .chat-panel { display: flex; }
+    body.show-chat .hdr-back { display: block; }
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- Login overlay -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <div class="login-logo">Zeli</div>
+    <h2>Live Conversations</h2>
+    <p>Enter dashboard password to continue</p>
+    <input type="password" class="login-input" id="pwInput" placeholder="Password" autocomplete="current-password" />
+    <div class="login-err" id="loginErr">Incorrect password</div>
+    <button class="login-btn" id="loginBtn">Enter →</button>
+  </div>
+</div>
+
+<!-- Header -->
+<div class="hdr">
+  <button class="hdr-back" id="backBtn">← Back</button>
+  <div class="hdr-title">Live Conversations</div>
+  <div class="hdr-meta">
+    <span id="convCount">—</span>
+    <span id="lastRefresh">—</span>
+    <div class="status-dot" id="statusDot"></div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-empty" id="sidebarEmpty">
+      <div class="icon">💬</div>
+      <p>No active conversations</p>
+    </div>
+  </div>
+
+  <div class="chat-panel" id="chatPanel">
+    <div class="chat-empty" id="chatEmpty">
+      <div class="icon">👈</div>
+      <p>Select a conversation</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  /* ── State ── */
+  const params = new URLSearchParams(location.search);
+  let pw = params.get('password') || '';
+  let conversations = {};
+  let selectedNumber = null;
+  let newMessages = new Set();
+  let lastCounts = {};
+  let pollId = null;
+
+  /* ── Boot ── */
+  if (pw) {
+    document.getElementById('loginOverlay').classList.add('hidden');
+    startPolling();
+  }
+
+  /* ── Login ── */
+  document.getElementById('pwInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+  document.getElementById('loginBtn').addEventListener('click', doLogin);
+  document.getElementById('backBtn').addEventListener('click', showSidebar);
+
+  async function doLogin() {
+    const val = document.getElementById('pwInput').value.trim();
+    if (!val) return;
+    try {
+      const r = await fetch(`/api/conversations?password=${enc(val)}`);
+      if (r.status === 401) {
+        document.getElementById('loginErr').style.display = 'block';
+        return;
+      }
+      pw = val;
+      document.getElementById('loginOverlay').classList.add('hidden');
+      const url = new URL(location.href);
+      url.searchParams.set('password', pw);
+      history.replaceState({}, '', url.toString());
+      startPolling();
+    } catch {
+      document.getElementById('loginErr').style.display = 'block';
+    }
+  }
+
+  /* ── Polling ── */
+  function startPolling() {
+    fetchConversations();
+    pollId = setInterval(fetchConversations, 3000);
+  }
+
+  async function fetchConversations() {
+    try {
+      const r = await fetch(`/api/conversations?password=${enc(pw)}`);
+      if (!r.ok) { setStatus(false); return; }
+      const data = await r.json();
+
+      // Detect new messages on non-selected conversations
+      for (const [num, conv] of Object.entries(data)) {
+        const prev = lastCounts[num] || 0;
+        const cur  = (conv.messages || []).length;
+        if (cur > prev && num !== selectedNumber) newMessages.add(num);
+        lastCounts[num] = cur;
+      }
+
+      conversations = data;
+      setStatus(true);
+      renderSidebar();
+      if (selectedNumber && conversations[selectedNumber]) renderChat(selectedNumber, false);
+      updateHeader();
+    } catch {
+      setStatus(false);
+    }
+  }
+
+  /* ── Header ── */
+  function updateHeader() {
+    const count = Object.keys(conversations).length;
+    document.getElementById('convCount').textContent = count + ' active';
+    document.getElementById('lastRefresh').textContent = fmtTime(new Date());
+  }
+
+  function setStatus(ok) {
+    document.getElementById('statusDot').className = 'status-dot' + (ok ? '' : ' err');
+  }
+
+  /* ── Sidebar ── */
+  function renderSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const empty   = document.getElementById('sidebarEmpty');
+    const nums = Object.keys(conversations);
+
+    if (nums.length === 0) {
+      empty.style.display = 'flex';
+      sidebar.querySelectorAll('.conv-item').forEach(el => el.remove());
+      return;
+    }
+    empty.style.display = 'none';
+
+    // Build index of existing items
+    const existing = {};
+    sidebar.querySelectorAll('.conv-item').forEach(el => { existing[el.dataset.num] = el; });
+
+    // Upsert items in order
+    nums.forEach(num => {
+      const conv = conversations[num];
+      const msgs = conv.messages || [];
+      const last = msgs[msgs.length - 1];
+      const preview = last ? last.body.substring(0, 65) + (last.body.length > 65 ? '…' : '') : '–';
+      const name  = conv.customer_name || num;
+      const time  = conv.last_message_at ? fmtTime(new Date(conv.last_message_at)) : '';
+      const isNew = newMessages.has(num);
+
+      let el = existing[num];
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'conv-item';
+        el.dataset.num = num;
+        el.addEventListener('click', () => selectConversation(num));
+        delete existing[num]; // mark as used
+      }
+
+      el.className = 'conv-item' + (num === selectedNumber ? ' active' : '');
+
+      el.innerHTML =
+        '<div class="conv-top">' +
+          '<div class="conv-name">' + esc(name) + '</div>' +
+          (isNew ? '<div class="new-dot"></div>' : '') +
+          '<div class="conv-time">' + esc(time) + '</div>' +
+        '</div>' +
+        '<div class="conv-preview">' + esc(preview) + '</div>' +
+        '<div class="conv-badges">' + vBadge(conv.vertical) + iBadge(conv.intent_score) + '</div>';
+
+      sidebar.appendChild(el); // re-append maintains sort order
+    });
+
+    // Remove stale items
+    sidebar.querySelectorAll('.conv-item').forEach(el => {
+      if (!conversations[el.dataset.num]) el.remove();
+    });
+  }
+
+  /* ── Select conversation ── */
+  function selectConversation(num) {
+    selectedNumber = num;
+    newMessages.delete(num);
+    renderSidebar();
+    renderChat(num, true);
+    document.body.classList.add('show-chat');
+  }
+
+  function showSidebar() {
+    document.body.classList.remove('show-chat');
+    selectedNumber = null;
+    renderSidebar();
+  }
+
+  /* ── Chat ── */
+  function renderChat(num, forceScroll) {
+    const panel = document.getElementById('chatPanel');
+    const conv  = conversations[num];
+    if (!conv) return;
+
+    document.getElementById('chatEmpty').style.display = 'none';
+
+    // Get or create persistent chat header + messages container
+    let hdrEl  = panel.querySelector('.chat-hdr');
+    let msgsEl = panel.querySelector('.chat-msgs');
+    const isNewChat = !hdrEl || hdrEl.dataset.num !== num;
+
+    if (isNewChat) {
+      // Clear and rebuild for new conversation
+      panel.innerHTML = '';
+      document.getElementById('chatEmpty').style.display = 'none'; // it was removed
+
+      hdrEl = document.createElement('div');
+      hdrEl.className = 'chat-hdr';
+      hdrEl.dataset.num = num;
+      panel.appendChild(hdrEl);
+
+      msgsEl = document.createElement('div');
+      msgsEl.className = 'chat-msgs';
+      panel.appendChild(msgsEl);
+    }
+
+    // Was user near bottom before update?
+    const wasNearBottom = isNearBottom(msgsEl);
+    const shouldScroll  = forceScroll || wasNearBottom;
+
+    // Update header
+    const name = conv.customer_name || num;
+    const msgCount = (conv.messages || []).length;
+    hdrEl.innerHTML =
+      '<div class="chat-hdr-name">' + esc(name) + '</div>' +
+      '<div class="chat-hdr-sub">' +
+        esc(num) + ' &nbsp;·&nbsp; ' + msgCount + ' msgs' +
+        ' &nbsp;' + vBadge(conv.vertical) + ' ' + iBadge(conv.intent_score) +
+      '</div>';
+
+    // Append only new messages (never re-render existing)
+    const msgs    = conv.messages || [];
+    const already = msgsEl.querySelectorAll('.bwrap').length;
+    for (let i = already; i < msgs.length; i++) {
+      const m   = msgs[i];
+      const dir = m.direction === 'outbound' ? 'out' : 'in';
+      const wrap = document.createElement('div');
+      wrap.className = 'bwrap ' + dir;
+      wrap.innerHTML =
+        '<div class="bubble ' + dir + '">' +
+          esc(m.body) +
+          '<div class="btime">' + fmtTs(m.timestamp) + '</div>' +
+        '</div>';
+      msgsEl.appendChild(wrap);
+    }
+
+    if (shouldScroll) msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
+  /* ── Helpers ── */
+  function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  function fmtTime(d) {
+    return d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function fmtTs(ts) {
+    if (!ts) return '';
+    try { return fmtTime(new Date(ts)); } catch { return ts; }
+  }
+
+  function enc(s) { return encodeURIComponent(s); }
+
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function vBadge(v) {
+    const map = {
+      autoparts:   ['b-autoparts',   'autoparts'],
+      realestate:  ['b-realestate',  're'],
+      exploratory: ['b-exploratory', 'explor'],
+      social:      ['b-social',      'social'],
+      unknown:     ['b-unknown',     'unknown'],
+    };
+    const [cls, lbl] = map[v] || map.unknown;
+    return '<span class="badge ' + cls + '">' + lbl + '</span>';
+  }
+
+  function iBadge(score) {
+    if (!score) return '';
+    const map = {
+      browsing:       ['b-browsing',    'browsing'],
+      considering:    ['b-considering', 'consider'],
+      ready_to_visit: ['b-ready',       'ready 🔥'],
+    };
+    const entry = map[score];
+    if (!entry) return '';
+    return '<span class="badge ' + entry[0] + '">' + entry[1] + '</span>';
+  }
+</script>
+</body>
+</html>

@@ -408,6 +408,68 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertNotEqual(reply, repeated)
         self.assertIn("presupuesto", reply.lower())
 
+    def test_realestate_serious_lead_notifies_owner_with_deterministic_signals(self):
+        customer = "+50760009999"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "Perfecto, cuéntame más.",
+            "intent_score": "browsing",
+            "extracted": {},
+            "should_notify_owner": False,
+        }), patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "tengo 10k y lo saco con banco")
+
+        briefing_mock.assert_called_once()
+        conv = re_module.re_conversations[customer]
+        self.assertEqual(conv["extracted"]["budget"], "$10,000")
+        self.assertEqual(conv["extracted"]["financing"], "con banco")
+        self.assertGreaterEqual(conv.get("lead_score", 0), 3)
+
+    def test_realestate_low_signal_message_does_not_notify_owner(self):
+        customer = "+50760100000"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "Perfecto, te explico.",
+            "intent_score": "browsing",
+            "extracted": {},
+            "should_notify_owner": False,
+        }), patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "ok gracias")
+
+        briefing_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

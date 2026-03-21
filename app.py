@@ -45,6 +45,7 @@ from connectors.local_store import (
 from beta_discovery import is_beta_user, handle_beta_message, get_beta_whitelist
 from connectors.sellers import is_seller, get_seller_name, get_seller_number_by_name
 from agent.intent import classify_intent
+from utils.conversation_store import log_message, update_metadata, get_all_conversations, get_conversation
 from agent.realestate import (
     process_realestate_lead,
     re_briefing_map as _re_briefing_map,
@@ -1369,6 +1370,13 @@ def _webhook_handler():
     owner_number        = "+" + owner_number
     incoming_normalized = incoming_number.replace("+", "").strip()
 
+    # Log inbound message (exclude owner and registered suppliers/sellers)
+    if incoming_normalized != owner_number.replace("+", "") and not is_seller(incoming_number):
+        _reg_sup = get_registered_suppliers()
+        _sup_nums = [s["number"] for s in _reg_sup]
+        if incoming_number not in _sup_nums:
+            log_message(incoming_number, "inbound", incoming_message)
+
     # 1.5 SELLER → must be checked before the owner block so that a whitelisted
     # seller whose number happens to match owner_number is not swallowed by the
     # owner flow and silently returned before the seller check is reached.
@@ -2287,6 +2295,7 @@ def _webhook_handler():
     # No active vertical context — classify fresh
     intent = classify_intent(incoming_message)
     print(f"🧭 Intent classified as '{intent}' for {incoming_number}: {incoming_message[:60]!r}")
+    update_metadata(incoming_number, vertical=intent)
 
     if intent == "realestate":
         thread = threading.Thread(
@@ -2549,6 +2558,25 @@ def hub():
 @app.route("/intel")
 def intel_dashboard():
     return send_from_directory("static", "intel.html")
+
+
+@app.route("/conversations")
+def conversations_page():
+    return send_from_directory("static", "conversations.html")
+
+
+@app.route("/api/conversations", methods=["GET"])
+def api_conversations():
+    password = request.args.get("password") or request.headers.get("X-Dashboard-Password")
+    if password != os.getenv("DASHBOARD_PASSWORD"):
+        return jsonify({"error": "unauthorized"}), 401
+    number = request.args.get("number")
+    if number:
+        convo = get_conversation(number)
+        if convo:
+            return jsonify({number: convo}), 200
+        return jsonify({"error": "not found"}), 404
+    return jsonify(get_all_conversations(max_age_hours=24)), 200
 
 
 @app.route("/api/claude", methods=["POST"])
