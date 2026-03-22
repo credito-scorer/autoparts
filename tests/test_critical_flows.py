@@ -13,6 +13,7 @@ os.environ["META_APP_SECRET"] = "test_secret"
 
 import app as app_module
 import agent.realestate as re_module
+import utils.conversation_store as conversation_store
 
 
 class CriticalFlowTests(unittest.TestCase):
@@ -33,6 +34,7 @@ class CriticalFlowTests(unittest.TestCase):
             app_module._startup_notified = False
         app_module._re_conversations.clear()
         app_module._exploratory_conversations.clear()
+        conversation_store.clear_all()
 
     def test_detect_needs_human_escalates_immediately(self):
         number = "+50711111111"
@@ -512,6 +514,86 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertNotIn("perfil", reply)
         self.assertIn("compartes tu nombre", reply)
         self.assertEqual(re_module.re_conversations[customer]["extracted"]["timeline"], "corto plazo")
+        briefing_mock.assert_called_once()
+
+    def test_realestate_profile_persists_across_restarts(self):
+        customer = "+50760122222"
+        conversation_store.update_metadata(
+            customer,
+            vertical="realestate",
+            re_profile={
+                "name": "Ricardo",
+                "budget": "$10,000",
+                "financing": "con banco",
+                "timeline": None,
+                "lead_score": 3,
+                "qualification_stage": "collect_timeline",
+                "live_handoff_started": False,
+            },
+            customer_name="Ricardo",
+        )
+        re_module.re_conversations.clear()
+
+        sent = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent.append((to, msg))
+            return "sid_text"
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "fallback",
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+        }), patch.object(re_module, "send_whatsapp", side_effect=_fake_send_whatsapp), \
+             patch.object(re_module, "send_owner_re_briefing") as briefing_mock:
+            re_module.process_realestate_lead(customer, "la próxima semana")
+
+        self.assertTrue(sent)
+        reply = sent[-1][1].lower()
+        self.assertIn("te escribe alguien del equipo", reply)
+        conv = re_module.re_conversations[customer]
+        self.assertEqual(conv["extracted"]["name"], "Ricardo")
+        self.assertEqual(conv["extracted"]["budget"], "$10,000")
+        self.assertEqual(conv["extracted"]["financing"], "con banco")
+        self.assertEqual(conv["extracted"]["timeline"], "corto plazo")
+        briefing_mock.assert_called_once()
+
+    def test_realestate_auto_live_handoff_starts_session(self):
+        customer = "+50760133333"
+        re_module.re_conversations[customer] = {
+            "history": [
+                {"role": "user", "content": "quiero lote"},
+                {"role": "assistant", "content": "¿Qué presupuesto manejas?"},
+            ],
+            "intent_score": "considering",
+            "extracted": {
+                "name": "Ricardo",
+                "budget": "$12,000",
+                "financing": "con banco",
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 3,
+            "last_notified_score": 3,
+            "qualification_stage": "collect_timeline",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "50764794106"}, clear=False), \
+             patch.object(re_module, "qualify_lead", return_value={
+                 "reply": "ok",
+                 "intent_score": "considering",
+                 "extracted": {},
+                 "should_notify_owner": False,
+             }), patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "la próxima semana")
+
+        self.assertIn(customer, app_module.live_sessions)
+        self.assertTrue(re_module.re_conversations[customer]["live_handoff_started"])
         briefing_mock.assert_called_once()
 
 

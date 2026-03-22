@@ -93,6 +93,8 @@ RESPONSE FORMAT — return valid JSON only, no markdown fences:
 """
 
 _OWNER_NUMBER = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+_QUAL_FIELDS = ("budget", "financing", "timeline", "name")
+_READY_LEAD_SCORE = 3
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -130,6 +132,36 @@ def _looks_repetitive(reply: str, history: list) -> bool:
     if not last_assistant:
         return False
     return _norm_text(reply) == _norm_text(last_assistant)
+
+
+def _extract_name_from_message(message: str) -> str | None:
+    raw = (message or "").strip()
+    msg = raw.lower()
+    patterns = [
+        r"(?:me llamo|soy|mi nombre es)\s+([a-záéíóúñü][a-záéíóúñü\s]{1,40})$",
+        r"^([a-záéíóúñü]{2,20})(?:\s+[a-záéíóúñü]{2,20})?$",
+    ]
+    stop_words = {
+        "hola", "gracias", "ok", "okey", "si", "sí", "dale", "buenas", "buenos dias",
+        "buenos días", "interesado", "construir", "inversion", "inversión",
+    }
+    if any(ch.isdigit() for ch in msg):
+        return None
+    for idx, pat in enumerate(patterns):
+        m = re.search(pat, msg)
+        if not m:
+            continue
+        candidate = m.group(1).strip()
+        if candidate in stop_words:
+            return None
+        parts = [p.capitalize() for p in candidate.split() if p]
+        if not parts:
+            return None
+        # Pattern 2 is permissive; reject known non-name content.
+        if idx == 1 and any(p.lower() in stop_words for p in parts):
+            return None
+        return " ".join(parts)
+    return None
 
 
 def _extract_budget_from_message(message: str) -> str | None:
@@ -198,6 +230,25 @@ def _compute_lead_score(extracted: dict, message: str) -> tuple[int, bool]:
     return score, visit_intent
 
 
+def _next_missing_field(extracted: dict) -> str | None:
+    for field in _QUAL_FIELDS:
+        if not extracted.get(field):
+            return field
+    return None
+
+
+def _next_prompt_for_field(field: str, extracted: dict) -> str:
+    if field == "budget":
+        return "Perfecto. Para ayudarte mejor, ¿qué presupuesto tienes en mente para el lote?"
+    if field == "financing":
+        return "Buenísimo. ¿Comprarías al contado o con financiamiento bancario?"
+    if field == "timeline":
+        return "Entendido. ¿Para cuándo te gustaría concretar compra o visita?"
+    if field == "name":
+        return "Excelente. Para continuar, ¿me compartes tu nombre?"
+    return "Cuéntame un poco más para ayudarte mejor."
+
+
 def _progressive_followup_reply(message: str, extracted: dict) -> str:
     msg = (message or "").lower()
     if "constru" in msg:
@@ -232,6 +283,8 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
             "Buenísimo, con esa información te puedo orientar mejor. "
             "¿Para cuándo quisieras concretar compra o visita?"
         )
+    if extracted.get("budget") and extracted.get("financing") and extracted.get("timeline") and not extracted.get("name"):
+        return "Perfecto. Si quieres, te comparto opciones y coordinamos visita. ¿Me compartes tu nombre?"
 
     if not extracted.get("budget"):
         return "Perfecto. Para orientarte mejor, ¿qué presupuesto tienes en mente para el lote?"
@@ -239,10 +292,39 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
         return "Buenísimo. ¿Planeas comprar al contado o con financiamiento bancario?"
     if not extracted.get("timeline"):
         return "Entendido. ¿Para cuándo te gustaría concretar la compra?"
-    return (
-        "Perfecto. Si quieres, te comparto las opciones que mejor encajan con tu presupuesto "
-        "y coordinamos visita. ¿Me compartes tu nombre?"
+    return "Excelente. ¿Quieres que coordinemos una visita o prefieres que te mande opciones por precio primero?"
+
+
+def _start_live_handoff(number: str, extracted: dict, score: str, lead_score: int) -> None:
+    """Start live session in app for qualified RE lead."""
+    try:
+        import app as _app  # late import to avoid circular at module load
+    except Exception as e:
+        print(f"⚠️ RE live handoff import error: {e}")
+        return
+
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    with _app._state_lock:
+        already_live = number in _app.live_sessions
+        _app.live_sessions[number] = True
+
+    if already_live or not owner_number:
+        return
+
+    msg_sid = send_whatsapp(
+        owner_number,
+        f"🔴 *Lead RE listo para atención en vivo*\n"
+        f"Cliente: {number}\n"
+        f"Nombre: {_fmt(extracted.get('name'), 'No proporcionado')}\n"
+        f"Presupuesto: {_fmt(extracted.get('budget'))}\n"
+        f"Financiamiento: {_fmt(extracted.get('financing'))}\n"
+        f"Timeline: {_fmt(extracted.get('timeline'))}\n"
+        f"Intent: {score} | Lead score: {lead_score}\n\n"
+        f"_Responde aquí para hablarle directamente. Escribe fin para cerrar._"
     )
+    if msg_sid:
+        with _app._state_lock:
+            _app.escalation_message_map[msg_sid] = number
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -320,6 +402,18 @@ def send_owner_re_briefing(number: str, lead_data: dict) -> None:
 def process_realestate_lead(number: str, message: str) -> None:
     """Main handler — maintain conversation state, qualify lead, brief owner."""
     now = datetime.now().isoformat()
+    normalized_number = number.replace("whatsapp:", "").strip()
+
+    # Hydrate persistent profile memory if available.
+    persisted_profile = {}
+    try:
+        from utils.conversation_store import get_conversation as _get_conversation
+        persisted = _get_conversation(normalized_number) or {}
+        persisted_profile = dict((persisted.get("re_profile") or {}))
+        if persisted.get("customer_name") and not persisted_profile.get("name"):
+            persisted_profile["name"] = persisted.get("customer_name")
+    except Exception:
+        persisted_profile = {}
 
     conv = re_conversations.setdefault(number, {
         "history":         [],
@@ -328,10 +422,16 @@ def process_realestate_lead(number: str, message: str) -> None:
                             "timeline": None, "specific_questions": []},
         "lead_score":      0,
         "last_notified_score": 0,
+        "qualification_stage": "collect_budget",
+        "live_handoff_started": False,
         "created_at":      now,
         "last_message_at": now,
     })
     conv["last_message_at"] = now
+    if persisted_profile:
+        for field in ("name", "budget", "financing", "timeline"):
+            if persisted_profile.get(field) and not conv["extracted"].get(field):
+                conv["extracted"][field] = persisted_profile[field]
 
     # Call qualifier
     result = qualify_lead(number, message, conv["history"])
@@ -357,15 +457,20 @@ def process_realestate_lead(number: str, message: str) -> None:
     det_budget = _extract_budget_from_message(message)
     det_financing = _extract_financing_from_message(message)
     det_timeline = _extract_timeline_from_message(message)
+    det_name = _extract_name_from_message(message)
     if det_budget:
         stored["budget"] = det_budget
     if det_financing:
         stored["financing"] = det_financing
     if det_timeline:
         stored["timeline"] = det_timeline
+    if det_name:
+        stored["name"] = det_name
 
     lead_score, visit_intent = _compute_lead_score(stored, message)
     conv["lead_score"] = max(conv.get("lead_score", 0), lead_score)
+    next_missing = _next_missing_field(stored)
+    conv["qualification_stage"] = f"collect_{next_missing}" if next_missing else "handoff_ready"
 
     # Upgrade intent deterministically when we already have meaningful buyer signals.
     if visit_intent:
@@ -379,6 +484,10 @@ def process_realestate_lead(number: str, message: str) -> None:
     ):
         reply = _progressive_followup_reply(message, stored)
 
+    # Stage-machine guard: on follow-ups, always move to the next missing qualifier.
+    if has_prior_assistant and next_missing:
+        reply = _next_prompt_for_field(next_missing, stored)
+
     prev_score        = conv["intent_score"]
     conv["intent_score"] = score
     conv["history"].append({"role": "user",      "content": message})
@@ -387,14 +496,24 @@ def process_realestate_lead(number: str, message: str) -> None:
     # Update conversation store metadata
     try:
         from utils.conversation_store import update_metadata as _update_metadata
-        _update_metadata(number, vertical="realestate", intent_score=score)
-        if stored.get("name"):
-            _update_metadata(number, customer_name=stored["name"])
+        _update_metadata(
+            normalized_number,
+            vertical="realestate",
+            intent_score=score,
+            customer_name=stored.get("name"),
+            re_profile={
+                "name": stored.get("name"),
+                "budget": stored.get("budget"),
+                "financing": stored.get("financing"),
+                "timeline": stored.get("timeline"),
+                "lead_score": conv.get("lead_score", 0),
+                "qualification_stage": conv.get("qualification_stage"),
+                "live_handoff_started": conv.get("live_handoff_started", False),
+                "updated_at": now,
+            },
+        )
     except Exception:
         pass
-
-    # Send reply to customer
-    send_whatsapp(number, reply)
 
     # Brief owner when: explicitly flagged, intent jumped to ready_to_visit,
     # or first time we hit considering+ with a name
@@ -403,22 +522,61 @@ def process_realestate_lead(number: str, message: str) -> None:
     ) or (
         score in ("considering", "ready_to_visit")
         and prev_score == "browsing"
-        and stored.get("name")
+        and bool(stored.get("name"))
     )
 
     deterministic_notify = lead_score >= 3
     should_notify = notify or score_escalated or (
         deterministic_notify and lead_score > conv.get("last_notified_score", 0)
     )
-    if should_notify:
+    should_start_live = (
+        not next_missing
+        and lead_score >= _READY_LEAD_SCORE
+        and not conv.get("live_handoff_started", False)
+    )
+
+    # Send reply to customer
+    if should_start_live:
+        handoff_reply = (
+            f"Perfecto{f' {stored.get('name')}' if stored.get('name') else ''}. "
+            "En un momento te escribe alguien del equipo de Zeli para coordinar visita y siguientes pasos. 👍"
+        )
+        conv["history"][-1]["content"] = handoff_reply
+        send_whatsapp(number, handoff_reply)
+    else:
+        send_whatsapp(number, reply)
+
+    if should_notify or should_start_live:
         send_owner_re_briefing(number, {"intent_score": score, "extracted": stored})
         conv["last_notified_score"] = lead_score
+        if should_start_live:
+            conv["live_handoff_started"] = True
+            _start_live_handoff(number, stored, score, lead_score)
         log_event("realestate_lead_briefed", {
             "customer_number": number,
             "intent_score":    score,
             "lead_score":      lead_score,
             "extracted":       stored,
             "raw_message":     message,
+            "live_handoff_started": should_start_live,
         })
+
+    try:
+        from utils.conversation_store import update_metadata as _update_metadata
+        _update_metadata(
+            normalized_number,
+            re_profile={
+                "name": stored.get("name"),
+                "budget": stored.get("budget"),
+                "financing": stored.get("financing"),
+                "timeline": stored.get("timeline"),
+                "lead_score": conv.get("lead_score", 0),
+                "qualification_stage": conv.get("qualification_stage"),
+                "live_handoff_started": conv.get("live_handoff_started", False),
+                "updated_at": now,
+            },
+        )
+    except Exception:
+        pass
 
     print(f"🏠 RE lead {number}: score={score}, lead_score={lead_score}, notify={should_notify}")
