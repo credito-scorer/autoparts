@@ -2582,20 +2582,29 @@ def api_conversations():
 @app.route("/api/claude", methods=["POST"])
 def claude_proxy():
     import requests as req
-    data = request.get_json()
+    data = request.get_json(force=True) or {}
+    # Password check — extract and strip before forwarding to Anthropic
+    password = data.pop("password", None)
+    if password != os.getenv("DASHBOARD_PASSWORD"):
+        return jsonify({"error": {"type": "auth_error", "message": "unauthorized"}}), 401
     headers = {
         "Content-Type": "application/json",
         "x-api-key": os.getenv("ANTHROPIC_API_KEY"),
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "web-search-2025-03-05"
     }
-    resp = req.post(
-        "https://api.anthropic.com/v1/messages",
-        json=data,
-        headers=headers,
-        timeout=120
-    )
-    return resp.json(), resp.status_code
+    try:
+        resp = req.post(
+            "https://api.anthropic.com/v1/messages",
+            json=data,
+            headers=headers,
+            timeout=120
+        )
+        return jsonify(resp.json()), resp.status_code
+    except req.exceptions.Timeout:
+        return jsonify({"error": {"type": "timeout", "message": "Request timed out after 120s"}}), 504
+    except Exception as e:
+        return jsonify({"error": {"type": "server_error", "message": str(e)}}), 500
 
 
 if __name__ == "__main__":
