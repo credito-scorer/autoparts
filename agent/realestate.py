@@ -197,11 +197,21 @@ def _extract_financing_from_message(message: str) -> str | None:
 
 def _extract_timeline_from_message(message: str) -> str | None:
     msg = (message or "").lower()
+    weekdays = (
+        "lunes", "martes", "miercoles", "miércoles", "jueves",
+        "viernes", "sabado", "sábado", "domingo"
+    )
     if any(k in msg for k in (
         "ya", "pronto", "esta semana", "esta quincena", "este mes",
         "la proxima semana", "la próxima semana", "proxima semana", "próxima semana",
-        "la semana que viene", "semana que viene", "la otra semana", "puede ser"
+        "la semana que viene", "semana que viene", "la otra semana", "puede ser",
+        "el lunes", "el martes", "el miercoles", "el miércoles", "el jueves",
+        "el viernes", "el sabado", "el sábado", "el domingo",
     )):
+        return "corto plazo"
+    if msg.strip() in weekdays:
+        return "corto plazo"
+    if re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", msg):
         return "corto plazo"
     if any(k in msg for k in ("mes que viene", "próximo mes", "proximo mes", "más adelante", "mas adelante")):
         return "mediano plazo"

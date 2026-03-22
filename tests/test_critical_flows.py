@@ -596,6 +596,43 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertTrue(re_module.re_conversations[customer]["live_handoff_started"])
         briefing_mock.assert_called_once()
 
+    def test_realestate_weekday_timeline_triggers_handoff(self):
+        customer = "+50760144444"
+        re_module.re_conversations[customer] = {
+            "history": [
+                {"role": "user", "content": "quiero lote"},
+                {"role": "assistant", "content": "¿Qué presupuesto manejas?"},
+            ],
+            "intent_score": "considering",
+            "extracted": {
+                "name": "Ricardo",
+                "budget": "$12,000",
+                "financing": "con banco",
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 3,
+            "last_notified_score": 3,
+            "qualification_stage": "collect_timeline",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "50764794106"}, clear=False), \
+             patch.object(re_module, "qualify_lead", return_value={
+                 "reply": "ok",
+                 "intent_score": "considering",
+                 "extracted": {},
+                 "should_notify_owner": False,
+             }), patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "lunes")
+
+        self.assertEqual(re_module.re_conversations[customer]["extracted"]["timeline"], "corto plazo")
+        self.assertIn(customer, app_module.live_sessions)
+        briefing_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
