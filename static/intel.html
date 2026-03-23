@@ -613,22 +613,38 @@ function showMain() {
 
 async function callClaude(systemPrompt, userPrompt) {
   const payload = {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-haiku-4-5-20251001',   // Haiku: higher rate limits, cheaper, sufficient for search+summarize
     max_tokens: 1024,
     tools: [{ type: 'web_search_20250305', name: 'web_search' }],
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
     password: pw
   };
-  const res = await fetch('/api/claude', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (res.status === 401) { showLogin(); throw new Error('Authentication required'); }
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data?.error?.message || `HTTP ${res.status}`);
-  return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await delay(30000);   // 30s wait before each retry
+
+    const res = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.status === 401) { showLogin(); throw new Error('Authentication required'); }
+    if (res.status === 429) {
+      if (attempt < 2) continue;           // retry after 30s
+      throw new Error('Rate limit — retried 3x, try again later');
+    }
+
+    // Fix: sanitize control characters before JSON.parse to avoid parse errors
+    const rawText = await res.text();
+    const clean   = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+    let data;
+    try { data = JSON.parse(clean); } catch { throw new Error('Invalid response from server'); }
+
+    if (!res.ok || data.error) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+    return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  }
 }
 
 function showLogin() {
@@ -867,7 +883,7 @@ async function runGroup(ids, label) {
 
   // Stagger launches 500ms apart, run concurrently
   const promises = ids.map((id, i) =>
-    delay(i * 500).then(() => runTrack(id, true))
+    delay(i * 2500).then(() => runTrack(id, true))  // 2.5s stagger to stay under rate limits
   );
   await Promise.allSettled(promises);
 
