@@ -334,8 +334,68 @@
     padding: 24px;
   }
   .synth-body.on { display: block; }
-  .synth-text { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); line-height: 1.9; white-space: pre-wrap; }
+  .synth-summary { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text-dim); line-height: 1.75; margin-bottom: 20px; padding: 14px; background: var(--surface2); border-radius: 3px; border-left: 2px solid var(--purple); }
   .synth-ts { font-family: 'Space Mono', monospace; font-size: 9px; color: var(--text-muted); margin-top: 16px; text-align: right; }
+
+  /* ── AD CARDS ── */
+  .ad-card {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 18px; margin-bottom: 12px;
+  }
+  .ad-header {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 8px; flex-wrap: wrap;
+  }
+  .ad-name { font-size: 14px; font-weight: 700; color: var(--text); }
+  .ad-sources {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    color: var(--purple); letter-spacing: 1px;
+  }
+  .ad-angle {
+    font-family: 'Space Mono', monospace; font-size: 10px;
+    color: var(--text-dim); line-height: 1.6; margin-bottom: 12px;
+    padding: 8px 10px; background: #a78bfa10; border-radius: 2px;
+    border-left: 2px solid var(--purple);
+  }
+  .ad-copy-wrap {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; padding: 14px; margin-bottom: 12px; position: relative;
+  }
+  .ad-copy-label {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .ad-copy-text {
+    font-family: 'Space Mono', monospace; font-size: 12px;
+    color: var(--text); line-height: 1.75; white-space: pre-wrap;
+    margin-bottom: 10px;
+  }
+  .copy-btn {
+    font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700;
+    padding: 5px 12px; border-radius: 2px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .copy-btn.copied { border-color: var(--green); color: var(--green); }
+
+  .ad-meta-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;
+  }
+  .ad-meta-item {
+    font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-dim); line-height: 1.5;
+  }
+  .meta-label {
+    display: block; font-size: 9px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--text-muted); margin-bottom: 2px;
+  }
+  .ad-targeting {
+    font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-dim);
+    line-height: 1.5; padding: 8px 10px; background: #3b82f60a;
+    border-radius: 2px; border-left: 2px solid var(--blue);
+  }
+  @media (max-width: 600px) { .ad-meta-grid { grid-template-columns: 1fr; } }
 
   /* ── MOBILE ── */
   @media (max-width: 600px) {
@@ -611,18 +671,36 @@ function showMain() {
    CLAUDE API
 ───────────────────────────────────────────────────────────── */
 
-async function callClaude(systemPrompt, userPrompt) {
+function safeJsonParse(text) {
+  // Strip markdown fences Claude sometimes wraps JSON in
+  let c = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  // Escape control characters inside JSON string values rather than stripping
+  c = c.replace(/[\x00-\x1F\x7F]/g, ch => {
+    if (ch === '\n') return '\\n';
+    if (ch === '\r') return '\\r';
+    if (ch === '\t') return '\\t';
+    return '';
+  });
+  return JSON.parse(c);
+}
+
+async function callClaude(systemPrompt, userPrompt, opts = {}) {
+  const { model = 'claude-haiku-4-5-20251001', useSearch = true, onRetry } = opts;
   const payload = {
-    model: 'claude-haiku-4-5-20251001',   // Haiku: higher rate limits, cheaper, sufficient for search+summarize
-    max_tokens: 1024,
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    model,
+    max_tokens: 2048,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
     password: pw
   };
+  if (useSearch) payload.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await delay(30000);   // 30s wait before each retry
+    if (attempt > 0) {
+      const waitSecs = attempt * 30;      // 30s first retry, 60s second
+      if (onRetry) onRetry(waitSecs);
+      await delay(waitSecs * 1000);
+    }
 
     const res = await fetch('/api/claude', {
       method: 'POST',
@@ -632,15 +710,13 @@ async function callClaude(systemPrompt, userPrompt) {
 
     if (res.status === 401) { showLogin(); throw new Error('Authentication required'); }
     if (res.status === 429) {
-      if (attempt < 2) continue;           // retry after 30s
+      if (attempt < 2) continue;
       throw new Error('Rate limit — retried 3x, try again later');
     }
 
-    // Fix: sanitize control characters before JSON.parse to avoid parse errors
     const rawText = await res.text();
-    const clean   = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
     let data;
-    try { data = JSON.parse(clean); } catch { throw new Error('Invalid response from server'); }
+    try { data = safeJsonParse(rawText); } catch { throw new Error('Invalid response from server'); }
 
     if (!res.ok || data.error) throw new Error(data?.error?.message || `HTTP ${res.status}`);
     return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
@@ -834,7 +910,9 @@ async function runTrack(id, fromBatch = false) {
   const sys = t.isVerticals ? SYS_VERTICALS : (t.cat === 're' ? SYS_RE : SYS_STANDARD);
 
   try {
-    const raw    = await callClaude(sys, t.prompt);
+    const raw = await callClaude(sys, t.prompt, {
+      onRetry: (secs) => { st.textContent = `Rate limited — retrying in ${secs}s…`; }
+    });
     const parsed = t.isVerticals ? parseVerticals(raw) : (t.cat === 're' ? parseRE(raw) : parseStandard(raw));
 
     trackResults[id] = parsed;
@@ -883,7 +961,7 @@ async function runGroup(ids, label) {
 
   // Stagger launches 500ms apart, run concurrently
   const promises = ids.map((id, i) =>
-    delay(i * 2500).then(() => runTrack(id, true))  // 2.5s stagger to stay under rate limits
+    delay(i * 3000).then(() => runTrack(id, true))  // 3s stagger to stay under rate limits
   );
   await Promise.allSettled(promises);
 
@@ -910,12 +988,31 @@ function updateProgress() {
    SYNTHESIS
 ───────────────────────────────────────────────────────────── */
 
+const SYS_SYNTHESIS = `You are Zeli's ad strategist. You've just received intelligence from multiple research tracks about the real estate market in Santiago, Veraguas, Panama.
+
+CONTEXT:
+- Zeli sells residential lots in La Coloradita, Santiago, Veraguas
+- Lots are approximately $15,000–$18,000 each, with título de propiedad
+- Utilities: water, electricity (no internet yet)
+- Payment: cash or bank loan (no owner financing)
+- All ads point to the Zeli WhatsApp number for inquiries
+
+IMPORTANT RULES:
+- Every claim in the ad must be supported by actual intel from the tracks. Do not invent facts.
+- Prices must match Zeli's actual lot prices ($15,000–$18,000). Do not use competitor prices.
+- All ad copy in Panamanian Spanish with tuteo conjugation. No foreign slang.
+- Be honest. The buyer is a working-class Panamanian who can save or get a bank loan, not someone who needs government housing assistance.
+- Raw land purchases do NOT qualify for interés preferencial. If referencing financing, frame it as: buying the lot now positions you to qualify for subsidized rates when you build.
+- Keep ad copy under 150 words. Short, punchy, WhatsApp CTA.
+
+YOUR JOB: Using ONLY the findings from the completed intelligence tracks provided, produce 2–3 ready-to-run Instagram/Facebook ads. Each ad targets a different buyer profile or exploits a different angle discovered in the intelligence.
+
+OUTPUT FORMAT — return valid JSON only, no markdown, no backticks:
+{"ads":[{"ad_name":"Short internal name","angle":"One sentence on why this angle works, citing which track(s) informed it","primary_text":"Main ad copy in Spanish","headline":"Short headline","cta":"Call to action text","targeting":{"age_range":"e.g. 25-45","location":"e.g. Santiago, Veraguas + Panama City","interests":["list","of","interests"],"why":"One sentence on why this targeting matches the angle"},"budget_suggestion":"e.g. $5/day for 3 days","intel_sources":["Track names that informed this ad"]}],"summary":"2–3 sentences on the overall market picture this week and what the ads are designed to exploit"}`;
+
 async function runSynthesis() {
   const completed = Object.entries(trackResults).filter(([,v]) => v !== null);
-  if (completed.length === 0) {
-    alert('Run at least one track first.');
-    return;
-  }
+  if (completed.length === 0) { alert('Run at least one track first.'); return; }
 
   const btn  = document.getElementById('synthBtn');
   const body = document.getElementById('synthBody');
@@ -925,33 +1022,90 @@ async function runSynthesis() {
   btn.disabled = true;
   btn.classList.add('pulse');
   body.classList.add('on');
-  text.textContent = 'Generating strategic synthesis…';
+  text.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:11px;color:var(--text-dim)">Generating ad briefs…</div>';
 
   const summaries = completed.map(([id, p]) => {
     const t = TRACKS[id];
     if (t.isVerticals && p.verticals) {
       const vList = p.verticals.map(v => `${v.name} (${v.desc})`).join(', ');
-      return `${t.name}: ${p.findings} Top picks: ${vList} | ${p.insight}`;
+      return `## ${t.name}\nFindings: ${p.findings}\nTop picks: ${vList}\nInsight: ${p.insight}`;
     }
-    let s = `${t.name}: ${p.findings} | Zeli implication: ${p.insight} | Urgency: ${p.urgency}`;
-    if (p.adAngle)   s += ` | Ad angle: ${p.adAngle}`;
-    if (p.targeting) s += ` | Targeting: ${p.targeting}`;
+    let s = `## ${t.name}\nFindings: ${p.findings}\nZeli implication: ${p.insight}\nUrgency: ${p.urgency}`;
+    if (p.adAngle)   s += `\nSuggested ad angle: ${p.adAngle}`;
+    if (p.targeting) s += `\nTargeting: ${p.targeting}`;
     return s;
-  }).join('\n\n');
+  }).join('\n\n---\n\n');
 
   try {
     const raw = await callClaude(
-      `You are the Zeli Intel Agent synthesizer for Zeli Technologies — a WhatsApp-native AI company in Santiago, Panama, solo-operated, building toward an MFI via bot network + credit scoring. Apply the 100-Year checklist framework. Produce a tight strategic synthesis: (1) top 3 actions for the next 30 days, (2) one risk to watch, (3) one RE ad angle worth testing immediately, (4) one thing from the tracks that wasn't on the radar before this scan. Be specific to Zeli. No fluff. Plain paragraphs only — no markdown headers, no bullet points.`,
-      `${completed.length} intelligence tracks scanned:\n\n${summaries}\n\nProvide the strategic synthesis for Zeli's next 30 days.`
+      SYS_SYNTHESIS,
+      `Here are findings from ${completed.length} completed intelligence tracks:\n\n${summaries}\n\nGenerate 2–3 ready-to-run ads based strictly on this intelligence.`,
+      { model: 'claude-sonnet-4-20250514', useSearch: false }   // Sonnet for complex JSON output
     );
-    text.textContent = raw;
+
+    let parsed;
+    try { parsed = safeJsonParse(raw); } catch(e) {
+      text.innerHTML = `<div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--red)">JSON parse failed: ${esc(e.message)}<br><br><pre style="white-space:pre-wrap;font-size:10px;color:var(--text-dim)">${esc(raw.substring(0,600))}</pre></div>`;
+      return;
+    }
+
+    let html = '';
+    if (parsed.summary) {
+      html += `<div class="synth-summary">${esc(parsed.summary)}</div>`;
+    }
+
+    (parsed.ads || []).forEach((ad, i) => {
+      const sources = (ad.intel_sources || []).join(' · ');
+      const interests = (ad.targeting?.interests || []).join(', ');
+      const copyId = `adcopy-${i}`;
+      html += `
+        <div class="ad-card">
+          <div class="ad-header">
+            <span class="ad-name">${esc(ad.ad_name || `Ad ${i+1}`)}</span>
+            ${sources ? `<span class="ad-sources">${esc(sources)}</span>` : ''}
+          </div>
+          ${ad.angle ? `<div class="ad-angle">${esc(ad.angle)}</div>` : ''}
+          <div class="ad-copy-wrap">
+            <div class="ad-copy-label">Primary text</div>
+            <div class="ad-copy-text" id="${copyId}">${esc(ad.primary_text || '')}</div>
+            <button class="copy-btn" onclick="copyAdText('${copyId}', this)">Copy</button>
+          </div>
+          <div class="ad-meta-grid">
+            ${ad.headline ? `<div class="ad-meta-item"><span class="meta-label">Headline</span>${esc(ad.headline)}</div>` : ''}
+            ${ad.cta ? `<div class="ad-meta-item"><span class="meta-label">CTA</span>${esc(ad.cta)}</div>` : ''}
+            ${ad.targeting?.age_range ? `<div class="ad-meta-item"><span class="meta-label">Age</span>${esc(ad.targeting.age_range)}</div>` : ''}
+            ${ad.budget_suggestion ? `<div class="ad-meta-item"><span class="meta-label">Budget</span>${esc(ad.budget_suggestion)}</div>` : ''}
+          </div>
+          ${(ad.targeting?.location || interests || ad.targeting?.why) ? `
+          <div class="ad-targeting">
+            <span class="meta-label">Targeting</span>
+            ${ad.targeting?.location ? esc(ad.targeting.location) : ''}
+            ${interests ? ` &nbsp;·&nbsp; ${esc(interests)}` : ''}
+            ${ad.targeting?.why ? `<br>${esc(ad.targeting.why)}` : ''}
+          </div>` : ''}
+        </div>`;
+    });
+
+    text.innerHTML = html;
     ts.textContent = 'Generated ' + new Date().toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' });
   } catch(e) {
-    text.textContent = 'Synthesis failed: ' + e.message;
+    text.innerHTML = `<div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--red)">Synthesis failed: ${esc(e.message)}</div>`;
   }
 
   btn.disabled = false;
   btn.classList.remove('pulse');
+}
+
+function copyAdText(elId, btn) {
+  const text = document.getElementById(elId)?.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied ✓';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {
+    btn.textContent = 'Copy failed';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  });
 }
 </script>
 </body>
