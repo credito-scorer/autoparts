@@ -5,6 +5,7 @@ import os
 import json
 import time
 import re
+import sys
 from datetime import datetime
 
 from anthropic import Anthropic
@@ -179,6 +180,23 @@ def _forced_handoff_reason(message: str, repetitive: bool = False) -> str | None
     )):
         return "customer_frustrated"
 
+    return None
+
+
+def _is_photo_request(message: str) -> bool:
+    msg = (message or "").lower()
+    return any(k in msg for k in (
+        "foto", "fotos", "imagen", "imagenes", "imágenes", "video", "videos",
+        "cómo se ve", "como se ve", "me puedes enviar", "me manda", "mándame", "mandame"
+    ))
+
+
+def _get_runtime_app_module():
+    """Resolve the currently running app module (app or __main__)."""
+    for mod_name in ("app", "__main__"):
+        mod = sys.modules.get(mod_name)
+        if mod and hasattr(mod, "live_sessions") and hasattr(mod, "_state_lock"):
+            return mod
     return None
 
 
@@ -382,10 +400,9 @@ def _progressive_followup_reply(message: str, extracted: dict) -> str:
 
 def _start_live_handoff(number: str, extracted: dict, score: str, lead_score: int) -> None:
     """Start live session in app for qualified RE lead."""
-    try:
-        import app as _app  # late import to avoid circular at module load
-    except Exception as e:
-        print(f"⚠️ RE live handoff import error: {e}")
+    _app = _get_runtime_app_module()
+    if _app is None:
+        print("⚠️ RE live handoff: runtime app module not found")
         return
 
     owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
@@ -591,6 +608,14 @@ def process_realestate_lead(number: str, message: str) -> None:
         conv["repeat_count"] = 0
 
     forced_reason = _forced_handoff_reason(message, repetitive=False)
+    # Guardrail: if model marks photos_requested but message does not ask for media,
+    # downgrade reason to avoid misleading owner context.
+    if (
+        bot_handoff
+        and handoff_reason == "photos_requested"
+        and not _is_photo_request(message)
+    ):
+        handoff_reason = "bot_confused"
     # Escalate repetitive loops only after repeated recurrence.
     if not forced_reason and conv["repeat_count"] >= 2:
         forced_reason = "repetitive"

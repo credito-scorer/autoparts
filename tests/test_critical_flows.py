@@ -2,6 +2,9 @@ import hashlib
 import hmac
 import json
 import os
+import sys
+import types
+import threading
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -668,6 +671,27 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertEqual(conv.get("state"), "live_handoff")
         self.assertTrue(conv.get("live_handoff_started"))
         self.assertIn(customer, app_module.live_sessions)
+
+    def test_re_live_handoff_resolves_main_module_instance(self):
+        fake_runtime = types.SimpleNamespace(
+            live_sessions={},
+            escalation_message_map={},
+            _state_lock=threading.RLock(),
+        )
+        no_runtime = types.SimpleNamespace()
+
+        with patch.dict(sys.modules, {"app": no_runtime, "__main__": fake_runtime}, clear=False), \
+             patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "+50764794106"}, clear=False), \
+             patch.object(re_module, "send_whatsapp", return_value="sid_live"):
+            re_module._start_live_handoff(
+                "+50769990000",
+                {"name": "Ricardo", "budget": "$10,000", "financing": "con banco", "timeline": "corto plazo"},
+                "considering",
+                4,
+            )
+
+        self.assertIn("+50769990000", fake_runtime.live_sessions)
+        self.assertEqual(fake_runtime.escalation_message_map.get("sid_live"), "+50769990000")
 
 
 if __name__ == "__main__":
