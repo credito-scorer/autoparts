@@ -77,6 +77,16 @@ SCORING:
 TONE: Warm, helpful, like a knowledgeable friend. Not salesy. Not robotic.
 Use tuteo. Keep replies concise — this is WhatsApp, not email.
 
+CRITICAL — LIVE HANDOFF RULES:
+You must include a "handoff" field in your JSON response. Set it to true in ANY of these cases:
+1. The customer asks for photos, images, pictures, or videos of the lots ("tiene fotos?", "me puede enviar fotos", "quiero ver imágenes", "cómo se ve el terreno", "fotos del lote")
+2. You don't understand what the customer is asking or their message doesn't relate to the lots
+3. The customer asks for something you can't do (schedule a visit, send documents, send location pin, make a call)
+4. The customer seems frustrated, confused, or is repeating themselves
+5. The customer explicitly asks to talk to a person ("quiero hablar con alguien", "hay alguien que me atienda", "con una persona")
+
+When handoff is true, also include a "handoff_reason" field explaining why.
+
 RESPONSE FORMAT — return valid JSON only, no markdown fences:
 {
   "reply": "Your WhatsApp message to the customer in Spanish",
@@ -88,13 +98,24 @@ RESPONSE FORMAT — return valid JSON only, no markdown fences:
     "timeline": null,
     "specific_questions": []
   },
-  "should_notify_owner": false
+  "should_notify_owner": false,
+  "handoff": false,
+  "handoff_reason": "photos_requested" | "bot_confused" | "customer_frustrated" | "human_requested" | "capability_limit" | null
 }\
 """
 
 _OWNER_NUMBER = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
 _QUAL_FIELDS = ("budget", "financing", "timeline", "name")
 _READY_LEAD_SCORE = 3
+
+HANDOFF_REASONS = {
+    "photos_requested":   "Cliente pidió fotos de los lotes",
+    "bot_confused":       "Bot no entendió la pregunta",
+    "customer_frustrated":"Cliente parece frustrado o confundido",
+    "human_requested":    "Cliente pidió hablar con una persona",
+    "capability_limit":   "Cliente pidió algo que el bot no puede hacer",
+    "repetitive":         "Bot estaba repitiendo respuestas",
+}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -337,6 +358,57 @@ def _start_live_handoff(number: str, extracted: dict, score: str, lead_score: in
             _app.escalation_message_map[msg_sid] = number
 
 
+def _send_handoff_briefing(
+    number: str,
+    reason_key: str,
+    last_customer_message: str,
+    extracted: dict,
+    score: str,
+    history: list,
+) -> None:
+    """Send transitional message to customer + escalation briefing to owner."""
+    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+
+    # 1. Notify customer
+    send_whatsapp(number, "Un momento, te comunico con alguien del equipo para ayudarte mejor. 👍")
+
+    if not owner_number:
+        return
+
+    reason_text = HANDOFF_REASONS.get(reason_key, reason_key)
+    name = _fmt(extracted.get("name"), "No proporcionado")
+    lead_score_val = extracted.get("_lead_score", "—")
+
+    # Build a brief conversation summary (last 4 turns max)
+    recent = history[-8:] if len(history) > 8 else history
+    summary_lines = []
+    for m in recent:
+        role_label = "Cliente" if m.get("role") == "user" else "Bot"
+        snippet = m.get("content", "")[:120]
+        summary_lines.append(f"  {role_label}: {snippet}")
+    summary = "\n".join(summary_lines) if summary_lines else "  (sin historial)"
+
+    clean_number = number.replace("whatsapp:", "").replace("+", "").strip()
+
+    body = (
+        f"🏠🔴 *Handoff de terreno — necesita atención*\n\n"
+        f"Número: {number}\n"
+        f"Nombre: {name}\n"
+        f"Razón: {reason_text}\n"
+        f"Score: {score}\n\n"
+        f"Último mensaje del cliente: \"{last_customer_message}\"\n\n"
+        f"Resumen de la conversación:\n{summary}\n\n"
+        f"_Responde a este mensaje para hablarle directamente._"
+    )
+
+    msg_sid = send_whatsapp(owner_number, body)
+    if msg_sid:
+        re_briefing_map[msg_sid] = number
+        print(f"🏠🔴 Handoff briefing sent → owner (sid={msg_sid}, lead={number}, reason={reason_key})")
+    else:
+        print(f"⚠️ Handoff briefing failed for {number}")
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def qualify_lead(number: str, message: str, history: list) -> dict:
@@ -363,6 +435,8 @@ def qualify_lead(number: str, message: str, history: list) -> dict:
             "extracted": {"name": None, "budget": None, "financing": None,
                           "timeline": None, "specific_questions": []},
             "should_notify_owner": False,
+            "handoff": False,
+            "handoff_reason": None,
         }
     except Exception as e:
         print(f"⚠️ qualify_lead error: {e}")
@@ -376,6 +450,8 @@ def qualify_lead(number: str, message: str, history: list) -> dict:
             "extracted": {"name": None, "budget": None, "financing": None,
                           "timeline": None, "specific_questions": []},
             "should_notify_owner": False,
+            "handoff": False,
+            "handoff_reason": None,
         }
 
 
@@ -446,10 +522,61 @@ def process_realestate_lead(number: str, message: str) -> None:
     # Call qualifier
     result = qualify_lead(number, message, conv["history"])
 
-    reply       = result.get("reply", "¿En qué te puedo ayudar con los lotes?")
-    score       = result.get("intent_score", conv["intent_score"])
-    extracted   = result.get("extracted") or {}
-    notify      = result.get("should_notify_owner", False)
+    reply          = result.get("reply", "¿En qué te puedo ayudar con los lotes?")
+    score          = result.get("intent_score", conv["intent_score"])
+    extracted      = result.get("extracted") or {}
+    notify         = result.get("should_notify_owner", False)
+    bot_handoff    = result.get("handoff", False)
+    handoff_reason = result.get("handoff_reason") or "bot_confused"
+
+    # ── Auto-handoff: check qualifier signal OR repetition ──────────────────────
+    repetitive = _looks_repetitive(reply, conv["history"])
+    if repetitive:
+        bot_handoff    = True
+        handoff_reason = "repetitive"
+
+    if bot_handoff and not conv.get("state") == "live_handoff":
+        # Merge what we have before briefing
+        stored_pre = conv["extracted"]
+        for field in ("name", "budget", "financing", "timeline"):
+            if extracted.get(field):
+                stored_pre[field] = extracted[field]
+        conv["history"].append({"role": "user", "content": message})
+        conv["state"] = "live_handoff"
+        # Pass lead_score into extracted for briefing display
+        stored_pre["_lead_score"] = conv.get("lead_score", 0)
+        _send_handoff_briefing(
+            number=number,
+            reason_key=handoff_reason,
+            last_customer_message=message,
+            extracted=stored_pre,
+            score=score,
+            history=conv["history"],
+        )
+        del stored_pre["_lead_score"]
+        try:
+            from utils.conversation_store import update_metadata as _update_metadata
+            _update_metadata(
+                normalized_number,
+                vertical="realestate",
+                intent_score=score,
+                customer_name=stored_pre.get("name"),
+                re_profile={
+                    "name": stored_pre.get("name"),
+                    "budget": stored_pre.get("budget"),
+                    "financing": stored_pre.get("financing"),
+                    "timeline": stored_pre.get("timeline"),
+                    "lead_score": conv.get("lead_score", 0),
+                    "qualification_stage": "live_handoff",
+                    "live_handoff_started": True,
+                    "handoff_reason": handoff_reason,
+                    "updated_at": now,
+                },
+            )
+        except Exception:
+            pass
+        print(f"🏠🔴 RE handoff triggered for {number}: reason={handoff_reason}")
+        return
 
     # Merge extracted fields — don't overwrite non-null with null
     stored = conv["extracted"]

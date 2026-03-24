@@ -2268,6 +2268,14 @@ def _webhook_handler():
     if re_conv:
         if _is_vertical_conv_stale(re_conv):
             _re_conversations.pop(incoming_number, None)
+        elif re_conv.get("state") == "live_handoff":
+            # Already handed off — forward message directly to owner, skip qualifier
+            send_whatsapp(
+                os.getenv("YOUR_PERSONAL_WHATSAPP", ""),
+                f"💬 *RE Lead ({incoming_number.replace('whatsapp:', '')}):*\n{incoming_message}",
+            )
+            log_message(incoming_number, "inbound", incoming_message)
+            return jsonify({"status": "ok"}), 200
         else:
             thread = threading.Thread(
                 target=process_realestate_lead,
