@@ -633,6 +633,42 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertIn(customer, app_module.live_sessions)
         briefing_mock.assert_called_once()
 
+    def test_realestate_photo_request_forces_immediate_live_handoff(self):
+        customer = "+50760155555"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "qualification_stage": "collect_budget",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "50764794106"}, clear=False), \
+             patch.object(re_module, "qualify_lead", return_value={
+                 "reply": "Claro, te cuento.",
+                 "intent_score": "browsing",
+                 "extracted": {},
+                 "should_notify_owner": False,
+                 "handoff": False,
+                 "handoff_reason": None,
+             }), patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "me puedes enviar fotos del lote?")
+
+        conv = re_module.re_conversations[customer]
+        self.assertEqual(conv.get("state"), "live_handoff")
+        self.assertTrue(conv.get("live_handoff_started"))
+        self.assertIn(customer, app_module.live_sessions)
+
 
 if __name__ == "__main__":
     unittest.main()

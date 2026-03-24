@@ -155,6 +155,33 @@ def _looks_repetitive(reply: str, history: list) -> bool:
     return _norm_text(reply) == _norm_text(last_assistant)
 
 
+def _forced_handoff_reason(message: str, repetitive: bool = False) -> str | None:
+    """Deterministically force handoff for high-risk/owner-needed scenarios."""
+    msg = (message or "").lower()
+    # Photos/media requests should always move to owner live handling.
+    if any(k in msg for k in (
+        "foto", "fotos", "imagen", "imagenes", "imágenes", "video", "videos",
+        "cómo se ve", "como se ve", "me puedes enviar", "me manda", "mándame", "mandame"
+    )):
+        return "photos_requested"
+
+    # Explicit human request.
+    if any(k in msg for k in (
+        "hablar con alguien", "hablar con una persona", "una persona", "un humano",
+        "con el dueño", "con el asesor", "con un agente"
+    )):
+        return "human_requested"
+
+    # Confusion/frustration signals.
+    if any(k in msg for k in (
+        "no entiendo", "no me entiendes", "confund", "esto no funciona",
+        "qué?", "que?", "no tiene sentido", "mejor alguien"
+    )):
+        return "customer_frustrated"
+
+    return None
+
+
 def _safe_parse_json(text: str):
     """Robust JSON parsing — handles preamble, markdown fences, control chars."""
     if not text or not text.strip():
@@ -525,6 +552,7 @@ def process_realestate_lead(number: str, message: str) -> None:
         "last_notified_score": 0,
         "qualification_stage": "collect_budget",
         "live_handoff_started": False,
+        "repeat_count": 0,
         "created_at":      now,
         "last_message_at": now,
     })
@@ -555,11 +583,20 @@ def process_realestate_lead(number: str, message: str) -> None:
     bot_handoff    = result.get("handoff", False)
     handoff_reason = result.get("handoff_reason") or "bot_confused"
 
-    # ── Auto-handoff: check qualifier signal OR repetition ──────────────────────
+    # ── Auto-handoff: qualifier signal OR deterministic guardrails ─────────────
     repetitive = _looks_repetitive(reply, conv["history"])
     if repetitive:
-        bot_handoff    = True
-        handoff_reason = "repetitive"
+        conv["repeat_count"] = int(conv.get("repeat_count", 0)) + 1
+    else:
+        conv["repeat_count"] = 0
+
+    forced_reason = _forced_handoff_reason(message, repetitive=False)
+    # Escalate repetitive loops only after repeated recurrence.
+    if not forced_reason and conv["repeat_count"] >= 2:
+        forced_reason = "repetitive"
+    if forced_reason:
+        bot_handoff = True
+        handoff_reason = forced_reason
 
     if bot_handoff and not conv.get("state") == "live_handoff":
         # Merge what we have before briefing
@@ -569,6 +606,7 @@ def process_realestate_lead(number: str, message: str) -> None:
                 stored_pre[field] = extracted[field]
         conv["history"].append({"role": "user", "content": message})
         conv["state"] = "live_handoff"
+        conv["live_handoff_started"] = True
         # Pass lead_score into extracted for briefing display
         stored_pre["_lead_score"] = conv.get("lead_score", 0)
         _send_handoff_briefing(
@@ -580,6 +618,7 @@ def process_realestate_lead(number: str, message: str) -> None:
             history=conv["history"],
         )
         del stored_pre["_lead_score"]
+        _start_live_handoff(number, stored_pre, score, conv.get("lead_score", 0))
         try:
             from utils.conversation_store import update_metadata as _update_metadata
             _update_metadata(
@@ -596,6 +635,7 @@ def process_realestate_lead(number: str, message: str) -> None:
                     "qualification_stage": "live_handoff",
                     "live_handoff_started": True,
                     "handoff_reason": handoff_reason,
+                    "state": "live_handoff",
                     "updated_at": now,
                 },
             )
