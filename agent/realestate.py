@@ -155,6 +155,33 @@ def _looks_repetitive(reply: str, history: list) -> bool:
     return _norm_text(reply) == _norm_text(last_assistant)
 
 
+def _safe_parse_json(text: str):
+    """Robust JSON parsing — handles preamble, markdown fences, control chars."""
+    if not text or not text.strip():
+        return None
+
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    end   = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        extracted = cleaned[start:end + 1]
+        extracted = re.sub(r'[\x00-\x1f\x7f]', lambda m: {
+            '\n': '\\n', '\r': '\\r', '\t': '\\t'
+        }.get(m.group(), ''), extracted)
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 def _extract_name_from_message(message: str) -> str | None:
     raw = (message or "").strip()
     msg = raw.lower()
@@ -411,8 +438,19 @@ def _send_handoff_briefing(
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+_HANDOFF_TRIGGER = {
+    "reply": "",
+    "intent_score": "browsing",
+    "extracted": {"name": None, "budget": None, "financing": None,
+                  "timeline": None, "specific_questions": []},
+    "should_notify_owner": False,
+    "handoff": True,
+    "handoff_reason": "bot_confused",
+}
+
+
 def qualify_lead(number: str, message: str, history: list) -> dict:
-    """Call Claude and return the parsed JSON response, or a safe fallback."""
+    """Call Claude and return the parsed JSON response, or a handoff trigger on failure."""
     messages = list(history) + [{"role": "user", "content": message}]
     try:
         resp = _client.messages.create(
@@ -421,38 +459,15 @@ def qualify_lead(number: str, message: str, history: list) -> dict:
             system=_SYSTEM,
             messages=messages,
         )
-        raw = resp.content[0].text.strip()
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"⚠️ qualify_lead JSON decode error: {e}")
-        return {
-            "reply": (
-                "¡Claro! Tenemos 9 lotes disponibles en La Coloradita, Santiago, "
-                "desde $15,004 hasta $17,502 (600-700 m²), con título de propiedad "
-                "y acceso asfaltado. ¿Buscas para construir pronto o como inversión?"
-            ),
-            "intent_score": "browsing",
-            "extracted": {"name": None, "budget": None, "financing": None,
-                          "timeline": None, "specific_questions": []},
-            "should_notify_owner": False,
-            "handoff": False,
-            "handoff_reason": None,
-        }
+        raw = resp.content[0].text.strip() if resp.content else ""
+        result = _safe_parse_json(raw)
+        if result is None:
+            print(f"⚠️ qualify_lead JSON parse failed for {number}. Raw (first 200): {raw[:200]!r}")
+            return dict(_HANDOFF_TRIGGER)
+        return result
     except Exception as e:
-        print(f"⚠️ qualify_lead error: {e}")
-        return {
-            "reply": (
-                "¡Claro! Tenemos 9 lotes disponibles en La Coloradita, Santiago, "
-                "desde $15,004 hasta $17,502 (600-700 m²), con título de propiedad "
-                "y acceso asfaltado. ¿Buscas para construir pronto o como inversión?"
-            ),
-            "intent_score": "browsing",
-            "extracted": {"name": None, "budget": None, "financing": None,
-                          "timeline": None, "specific_questions": []},
-            "should_notify_owner": False,
-            "handoff": False,
-            "handoff_reason": None,
-        }
+        print(f"⚠️ qualify_lead error for {number}: {e}")
+        return dict(_HANDOFF_TRIGGER)
 
 
 def send_owner_re_briefing(number: str, lead_data: dict) -> None:
@@ -514,6 +529,17 @@ def process_realestate_lead(number: str, message: str) -> None:
         "last_message_at": now,
     })
     conv["last_message_at"] = now
+
+    # Defensive guard: if already in live_handoff, forward directly and skip qualifier
+    if conv.get("state") == "live_handoff":
+        owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+        if owner_number:
+            send_whatsapp(
+                owner_number,
+                f"💬 *RE Lead ({number}):*\n{message}",
+            )
+        print(f"🏠 Live handoff guard (process_realestate_lead): forwarded from {number} to owner")
+        return
     if persisted_profile:
         for field in ("name", "budget", "financing", "timeline"):
             if persisted_profile.get(field) and not conv["extracted"].get(field):

@@ -2266,6 +2266,7 @@ def _webhook_handler():
     # 7. ALL OTHER MESSAGES → active vertical context first, then fresh classify
     re_conv = _re_conversations.get(incoming_number)
     if re_conv:
+        print(f"🏠 RE convo found for {incoming_number}: state={re_conv.get('state', 'NO STATE')}")
         if _is_vertical_conv_stale(re_conv):
             _re_conversations.pop(incoming_number, None)
         elif re_conv.get("state") == "live_handoff":
