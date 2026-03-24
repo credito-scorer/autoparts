@@ -256,6 +256,96 @@ class CriticalFlowTests(unittest.TestCase):
         re_mock.assert_called_once_with(customer, "cuanto cuesta")
         classify_mock.assert_not_called()
 
+    def test_re_live_handoff_state_routes_to_owner_and_maps_reply_sid(self):
+        customer = "+50760005555"
+        app_module._re_conversations[customer] = {
+            "state": "live_handoff",
+            "history": [],
+            "intent_score": "considering",
+            "extracted": {},
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.re.live.guard",
+                            "from": customer.replace("+", ""),
+                            "type": "text",
+                            "text": {"body": "sigues ahi?"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "50764794106"}, clear=False), \
+             patch.object(app_module, "send_whatsapp", return_value="sid_re_live"), \
+             patch.object(app_module, "classify_intent", return_value="social"):
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(app_module.escalation_message_map.get("sid_re_live"), customer)
+        self.assertIn(customer, app_module.live_sessions)
+
+    def test_persisted_re_live_handoff_recovers_live_mode(self):
+        customer = "+50760007771"
+        conversation_store.update_metadata(
+            customer,
+            re_profile={"state": "live_handoff", "live_handoff_started": True},
+        )
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.re.live.persisted",
+                            "from": customer.replace("+", ""),
+                            "type": "text",
+                            "text": {"body": "tienes fotos?"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": "50764794106"}, clear=False), \
+             patch.object(app_module, "send_whatsapp", return_value="sid_re_persist"), \
+             patch.object(app_module, "classify_intent", return_value="social"):
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(customer, app_module.live_sessions)
+        self.assertEqual(app_module.escalation_message_map.get("sid_re_persist"), customer)
+
     def test_stale_re_conversation_expires_then_classifies_fresh(self):
         customer = "+50760006666"
         stale_ts = (datetime.now() - timedelta(hours=25)).isoformat()

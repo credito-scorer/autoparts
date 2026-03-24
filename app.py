@@ -1144,6 +1144,16 @@ def _normalize_number(n: str) -> str:
     return n.replace("whatsapp:", "").replace("+", "").replace(" ", "").replace("-", "").strip()
 
 
+def _has_persisted_re_live_handoff(number: str) -> bool:
+    """Fallback for multi-instance/restart: recover RE live handoff from persisted metadata."""
+    try:
+        convo = get_conversation(number) or {}
+        profile = convo.get("re_profile") or {}
+        return bool(profile.get("live_handoff_started") or profile.get("state") == "live_handoff")
+    except Exception:
+        return False
+
+
 def is_customer_beta(number: str) -> bool:
     raw = os.getenv("CUSTOMER_BETA_NUMBERS", "")
     if not raw:
@@ -1667,6 +1677,17 @@ def _webhook_handler():
             if incoming_message.strip().lower() == "fin":
                 with _state_lock:
                     live_sessions.pop(customer_number, None)
+                try:
+                    convo = get_conversation(customer_number) or {}
+                    re_profile = dict((convo.get("re_profile") or {}))
+                    if re_profile:
+                        re_profile["live_handoff_started"] = False
+                        if re_profile.get("state") == "live_handoff":
+                            re_profile["state"] = "closed"
+                        re_profile["updated_at"] = datetime.now().isoformat()
+                        update_metadata(customer_number, re_profile=re_profile)
+                except Exception:
+                    pass
                 send_whatsapp(
                     customer_number,
                     "Fue un gusto atenderte. Si necesitas algo más, aquí estamos. 👋\n\n"
@@ -1841,6 +1862,10 @@ def _webhook_handler():
     # 5. LIVE SESSION → forward to owner, skip the bot
     with _state_lock:
         in_live_session = incoming_number in live_sessions
+    if not in_live_session and _has_persisted_re_live_handoff(incoming_number):
+        with _state_lock:
+            live_sessions[incoming_number] = True
+            in_live_session = True
     if in_live_session:
         if owner_number:
             msg_sid = send_whatsapp(
@@ -2271,10 +2296,15 @@ def _webhook_handler():
             _re_conversations.pop(incoming_number, None)
         elif re_conv.get("state") == "live_handoff":
             # Already handed off — forward message directly to owner, skip qualifier
-            send_whatsapp(
-                os.getenv("YOUR_PERSONAL_WHATSAPP", ""),
+            owner_live_number = "+" + _normalize_number(os.getenv("YOUR_PERSONAL_WHATSAPP", ""))
+            msg_sid = send_whatsapp(
+                owner_live_number,
                 f"💬 *RE Lead ({incoming_number.replace('whatsapp:', '')}):*\n{incoming_message}",
             )
+            if msg_sid:
+                with _state_lock:
+                    escalation_message_map[msg_sid] = incoming_number
+                    live_sessions[incoming_number] = True
             log_message(incoming_number, "inbound", incoming_message)
             return jsonify({"status": "ok"}), 200
         else:

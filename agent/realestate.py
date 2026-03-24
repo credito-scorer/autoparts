@@ -405,7 +405,8 @@ def _start_live_handoff(number: str, extracted: dict, score: str, lead_score: in
         print("⚠️ RE live handoff: runtime app module not found")
         return
 
-    owner_number = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    owner_digits = re.sub(r"\D", "", os.getenv("YOUR_PERSONAL_WHATSAPP", "") or "")
+    owner_number = f"+{owner_digits}" if owner_digits else ""
     with _app._state_lock:
         already_live = number in _app.live_sessions
         _app.live_sessions[number] = True
