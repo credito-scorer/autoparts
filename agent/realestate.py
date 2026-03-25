@@ -34,6 +34,77 @@ _last_message_time: dict = {}   # number → timestamp of last received message
 _debounce_lock = threading.Lock()
 DEBOUNCE_SECONDS = 3.0
 
+_sheets_lock = threading.Lock()   # serialise all Sheets writes from multiple threads
+_RE_STATE_TTL = 86400             # seconds — matches _is_vertical_conv_stale TTL
+
+
+def _get_re_state_sheet():
+    """Open (or create) the re_state worksheet in the Zeli Sheets workbook."""
+    import gspread
+    from connectors.sheets import get_client
+    client = get_client()
+    spreadsheet = client.open_by_key(os.getenv("GOOGLE_SHEETS_ID", ""))
+    try:
+        return spreadsheet.worksheet("re_state")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title="re_state", rows=500, cols=3)
+        ws.append_row(["number", "state", "updated_at"])
+        return ws
+
+
+def _persist_state(number: str, conv: dict) -> None:
+    """Upsert conversation state to re_state sheet. Row = [number, state_json, updated_at]."""
+    try:
+        with _sheets_lock:
+            sheet = _get_re_state_sheet()
+            records = sheet.get_all_records()
+            numbers = [str(r.get("number", "")) for r in records]
+            row_data = [number, json.dumps(conv), datetime.utcnow().isoformat()]
+            if number in numbers:
+                row_idx = numbers.index(number) + 2  # 1-indexed + header row
+                sheet.update(f"A{row_idx}:C{row_idx}", [row_data])
+            else:
+                sheet.append_row(row_data)
+    except Exception as e:
+        print(f"⚠️ State persist failed for {number}: {e}")
+
+
+def _rehydrate_state() -> None:
+    """Load persisted conversation state from re_state sheet into re_conversations."""
+    try:
+        sheet = _get_re_state_sheet()
+        records = sheet.get_all_records()
+        cutoff = time.time() - _RE_STATE_TTL
+        loaded = 0
+        for row in records:
+            number     = str(row.get("number", "")).strip()
+            state_json = str(row.get("state", "")).strip()
+            if not number or not state_json:
+                continue
+            try:
+                conv = json.loads(state_json)
+            except Exception:
+                continue
+            # Skip entries older than the stale TTL — they'd be discarded anyway.
+            last = conv.get("last_message_at") or conv.get("updated_at", "")
+            try:
+                from datetime import timezone
+                last_ts = datetime.fromisoformat(str(last)).replace(
+                    tzinfo=timezone.utc
+                ).timestamp()
+                if last_ts < cutoff:
+                    continue
+            except Exception:
+                pass
+            re_conversations[number] = conv
+            loaded += 1
+        print(f"♻️ Rehydrated {loaded} RE conversations from Sheets.")
+    except Exception as e:
+        print(f"⚠️ State rehydration failed: {e}")
+
+
+_rehydrate_state()
+
 
 def _should_process(number: str) -> bool:
     """Return True only if no newer message arrived for this number within DEBOUNCE_SECONDS."""
@@ -185,6 +256,17 @@ HANDOFF_REASONS = {
     "capability_limit":   "Cliente pidió algo que el bot no puede hacer",
     "repetitive":         "Bot estaba repitiendo respuestas",
 }
+
+SKEPTICISM_PHRASES = [
+    "es cierto", "de ser real", "es verdad", "no es estafa",
+    "es legítimo", "es legitimo", "es confiable", "cómo sé que es real",
+    "como se que es real", "es real", "existe", "es serio",
+]
+
+
+def _is_skepticism(message: str) -> bool:
+    msg = (message or "").lower().strip()
+    return any(phrase in msg for phrase in SKEPTICISM_PHRASES)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -709,21 +791,26 @@ def process_realestate_lead(number: str, message: str) -> None:
     else:
         conv["repeat_count"] = 0
 
-    forced_reason = _forced_handoff_reason(message, repetitive=False)
-    # Guardrail: if model marks photos_requested but message does not ask for media,
-    # downgrade reason to avoid misleading owner context.
-    if (
-        bot_handoff
-        and handoff_reason == "photos_requested"
-        and not _is_photo_request(message)
-    ):
-        handoff_reason = "bot_confused"
-    # Escalate repetitive loops only after repeated recurrence.
-    if not forced_reason and conv["repeat_count"] >= 2:
-        forced_reason = "repetitive"
-    if forced_reason:
-        bot_handoff = True
-        handoff_reason = forced_reason
+    # Skepticism short-circuit: let Claude handle autonomously, never force handoff.
+    if _is_skepticism(message):
+        forced_reason = None
+        bot_handoff = False
+    else:
+        forced_reason = _forced_handoff_reason(message, repetitive=False)
+        # Guardrail: if model marks photos_requested but message does not ask for media,
+        # downgrade reason to avoid misleading owner context.
+        if (
+            bot_handoff
+            and handoff_reason == "photos_requested"
+            and not _is_photo_request(message)
+        ):
+            handoff_reason = "bot_confused"
+        # Escalate repetitive loops only after repeated recurrence.
+        if not forced_reason and conv["repeat_count"] >= 2:
+            forced_reason = "repetitive"
+        if forced_reason:
+            bot_handoff = True
+            handoff_reason = forced_reason
 
     if bot_handoff and not conv.get("state") == "live_handoff":
         # Merge what we have before briefing
@@ -769,6 +856,7 @@ def process_realestate_lead(number: str, message: str) -> None:
         except Exception:
             pass
         print(f"🏠🔴 RE handoff triggered for {number}: reason={handoff_reason}")
+        _persist_state(number, conv)
         return
 
     # Merge extracted fields — don't overwrite non-null with null
@@ -908,4 +996,5 @@ def process_realestate_lead(number: str, message: str) -> None:
     except Exception:
         pass
 
+    _persist_state(number, conv)
     print(f"🏠 RE lead {number}: score={score}, lead_score={lead_score}, notify={should_notify}")
