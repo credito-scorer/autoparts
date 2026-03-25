@@ -4,6 +4,7 @@ Real estate lead qualifier for Zeli — Lotes La Coloradita, Santiago, Veraguas.
 import os
 import json
 import time
+import threading
 import re
 import sys
 from datetime import datetime
@@ -28,6 +29,21 @@ re_conversations: dict = {}
 
 re_briefing_map: dict = {}
 # outbound briefing SID → customer_number (kept alive across replies, Option A)
+
+_last_message_time: dict = {}   # number → timestamp of last received message
+_debounce_lock = threading.Lock()
+DEBOUNCE_SECONDS = 3.0
+
+
+def _should_process(number: str) -> bool:
+    """Return True only if no newer message arrived for this number within DEBOUNCE_SECONDS."""
+    with _debounce_lock:
+        _last_message_time[number] = time.time()
+
+    time.sleep(DEBOUNCE_SECONDS)
+
+    with _debounce_lock:
+        return _last_message_time.get(number) <= time.time() - DEBOUNCE_SECONDS + 0.05
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
@@ -628,6 +644,10 @@ def send_owner_re_briefing(number: str, lead_data: dict) -> None:
 
 def process_realestate_lead(number: str, message: str) -> None:
     """Main handler — maintain conversation state, qualify lead, brief owner."""
+    if not _should_process(number):
+        print(f"⏭️ Debounced duplicate from {number}, skipping.")
+        return
+
     now = datetime.now().isoformat()
     normalized_number = number.replace("whatsapp:", "").strip()
 
