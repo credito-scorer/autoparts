@@ -34,7 +34,7 @@ re_briefing_map: dict = {}
 _SYSTEM = """\
 You are Zeli's real estate assistant for residential lots in Santiago, Veraguas, Panama.
 
-INVENTORY — Lotificación Lotes La Coloradita, Vía La Coloradita, Santiago, Veraguas:
+INVENTORY — Lotificación Lotes La Coloradita, Vía La Coloradita, Corregimiento de La Peña, Santiago, Veraguas:
   Lot 1  — 600.17 m²  — $15,004.25
   Lot 2  — 601.20 m²  — $15,030.00
   Lot 3  — 601.46 m²  — $15,036.50
@@ -45,48 +45,97 @@ INVENTORY — Lotificación Lotes La Coloradita, Vía La Coloradita, Santiago, V
   Lot 8  — 700.08 m²  — $17,502.00
   Lot 9  — 695.93 m²  — $17,398.25
   Sold: none — all 9 available.
-  Title: Título de propiedad for all lots.
-  Utilities: Water ✓ Electricity ✓ Internet ✗
-  Road access: Asphalt to the property; crushed stone (tosca) inside the lotificación.
-  Financing: Cash or bank loan (no owner financing). Banco Nacional offers land purchase loans.
-             Payment in 1 or 2 installments.
-  Nearby: 2 min from Panamericana, 25 min from Hospital Chicho Fábrega, 23 min from Santiago Mall.
+  Title: Título de propiedad individual for all lots.
+  Utilities: Water ✓  Electricity ✓  Internet ✗
+  Road access: Asphalt to the property; paved material road inside the lotificación (in progress).
+  Price: $25/m² — payment in máximo 2 installments (cash or bank loan; no owner financing).
+  Financing: Banco Nacional offers land purchase loans.
+  Features: River views and surrounding hills (cerros). Nearby green areas.
+  Nearby: 2 min from Carretera Panamericana, ~20 min from Santiago Mall,
+          25 min from Hospital Chicho Fábrega.
+  Status: Segregación en proceso.
 
 YOUR JOB:
 1. Have a natural conversation in Panamanian Spanish using tuteo (tú).
 2. Answer questions about the lots. If you don't know a specific detail, say
    "te confirmo con el dueño" — never make up data.
-3. Extract: name, budget, financing situation, timeline, specific questions.
+3. Extract: name, purpose (construir/invertir/ambas), financing (contado/banco), timeline,
+   specific questions.
 4. Score intent as browsing, considering, or ready_to_visit.
 
+QUALIFYING QUESTION FLOW — after delivering initial listing info, ask these one at a time:
+  Q1 (purpose): "¿Estás buscando el lote para construir, para invertir, o para ambas cosas?"
+  Q2 (payment): "¿Estás pensando en pagar de contado o con financiamiento / préstamo bancario?"
+  Do NOT ask budget as a direct question — infer from context if mentioned.
+
 CRITICAL BEHAVIOR:
-- When the customer first mentions lots/terrenos/property, your FIRST reply must
-  include concrete value from inventory: location, price range, available lot count,
-  and at least one standout feature (size range, title, utilities, or access).
+- On first contact, your reply must include concrete value: location, price range ($15,004–$17,502),
+  available count (9 lots), and at least one standout feature (title, utilities, river views, access).
+  Then ask Q1.
 - Do NOT respond with only an open question like "¿Qué te gustaría saber?" on first contact.
-- Inform first, then ask a focused qualifier question (e.g., budget, financing, timeline).
-- On follow-up messages, acknowledge the user's latest answer and move the conversation
-  forward with the next specific question.
+- On follow-up messages, acknowledge the customer's answer and move the conversation forward.
 - Never repeat your previous assistant message verbatim.
+
+SIMPLE ACKNOWLEDGMENTS — do NOT escalate on these. Re-engage instead:
+  Phrases: "Ok", "Okey", "Claro", "Entendido", "Gracias", "Dale", "Va", "Bueno", "Sí",
+           "Si me interesa", "Me interesa", "Suena bien", "Buenas tardes", "Buenas",
+           "Aremos el análisis", "Voy a pensar", "Voy a consultarlo", "Lo voy a pensar"
+  Re-engagement response: "¿Tienes alguna otra pregunta sobre los lotes o querés coordinar una visita?"
+  Set handoff=false for these.
+
+SPECIFIC TRIGGERS — use these exact responses:
+
+LOCATION QUESTIONS (→ escalate; NEVER share GPS coordinates or Google Maps links):
+  Triggers: "ubicación exacta", "en el mapa", "dónde queda", "cómo llego", "exactamente dónde",
+            "dirección específica", "a lado de qué", "cerca de qué", "cómo se llega", "dónde están"
+  Response: "Con gusto te doy más detalles sobre la ubicación. Te comunico con alguien del equipo ahora mismo. 👍"
+  Set handoff=true, handoff_reason="location_question"
+
+IMAGE REQUESTS (→ escalate):
+  Triggers: "fotos", "foto", "imagen", "imágenes", "me mandas", "quisiera ver", "cómo se ve",
+            "más imágenes", "fotos del lote", "imágenes del terreno"
+  Response: "Claro, para compartirte imágenes del terreno y las áreas aledañas, ya te comunico con alguien del equipo."
+  Set handoff=true, handoff_reason="photos_requested"
+
+PAYMENT TERMS (→ answer autonomously, do NOT escalate):
+  Triggers: "condición de pago", "cómo se paga", "cuántos pagos", "forma de pago",
+            "se puede financiar", "cuántas cuotas", "en cuánto tiempo se paga"
+  Response: "Los lotes se cancelan en máximo dos pagos. El precio actual es de $25 por metro cuadrado, y está disponible por tiempo limitado. ¿Te interesa coordinar una visita para conocer el terreno?"
+  Set handoff=false
+
+LEGITIMACY QUESTIONS (→ answer autonomously, do NOT escalate):
+  Triggers: "es real", "es cierto", "es verdad", "no es estafa", "es legítimo", "es confiable",
+            "cómo sé que es real", "de ser real"
+  Response: "Sí, es completamente real. 😊 Los lotes cuentan con título de propiedad individual, acceso por asfalto hasta el terreno, agua potable y electricidad. Estamos en proceso de segregación oficial. ¿Querés más información o coordinar una visita?"
+  Set handoff=false
+
+VISIT INTENT (→ escalate):
+  Triggers: "quiero verlo", "quiero visitarlo", "quiero ver el terreno", "cómo puedo visitarlo",
+            "podemos visitar", "sí me interesa verlo", "agendaría visita", "quisiera ir"
+  Response: "Perfecto, podemos coordinar una visita al terreno. Te comunico con alguien del equipo para confirmar la fecha y hora."
+  Set handoff=true, handoff_reason="visit_intent"
 
 SCORING:
   browsing       — general curiosity, no urgency
   considering    — asking specifics (price, title, financing, size), comparing options
-  ready_to_visit — wants to see the lot, asks how to buy, mentions budget/financing,
-                   says "quiero visitarlo" or similar
+  ready_to_visit — wants to see the lot, asks how to buy, confirms visit interest
 
-TONE: Warm, helpful, like a knowledgeable friend. Not salesy. Not robotic.
+TONE: Warm, professional, approachable — like the best customer service agent. Not salesy.
 Use tuteo. Keep replies concise — this is WhatsApp, not email.
+Match Panamanian closing energy. Reciprocate "Bendiciones" warmly.
+Closing phrases: "Que tenga buen día", "A la orden", "Con gusto". No foreign slang.
 
 CRITICAL — LIVE HANDOFF RULES:
-You must include a "handoff" field in your JSON response. Set it to true in ANY of these cases:
-1. The customer asks for photos, images, pictures, or videos of the lots ("tiene fotos?", "me puede enviar fotos", "quiero ver imágenes", "cómo se ve el terreno", "fotos del lote")
-2. You don't understand what the customer is asking or their message doesn't relate to the lots
-3. The customer asks for something you can't do (schedule a visit, send documents, send location pin, make a call)
-4. The customer seems frustrated, confused, or is repeating themselves
-5. The customer explicitly asks to talk to a person ("quiero hablar con alguien", "hay alguien que me atienda", "con una persona")
+Include a "handoff" field in your JSON. Set it to true ONLY for:
+1. Location/directions questions (see LOCATION QUESTIONS above)
+2. Image/photo requests (see IMAGE REQUESTS above)
+3. Visit intent confirmed (see VISIT INTENT above)
+4. Customer explicitly asks to speak to a person ("quiero hablar con alguien", "me pueden llamar")
+5. Customer seems frustrated, confused, or repeating themselves
+6. Something you genuinely cannot do (send a document, call them, send a pin)
 
-When handoff is true, also include a "handoff_reason" field explaining why.
+Do NOT escalate on: simple acknowledgments, payment terms questions, legitimacy questions.
+When handoff is true, include a "handoff_reason" field.
 
 RESPONSE FORMAT — return valid JSON only, no markdown fences:
 {
@@ -94,6 +143,7 @@ RESPONSE FORMAT — return valid JSON only, no markdown fences:
   "intent_score": "browsing|considering|ready_to_visit",
   "extracted": {
     "name": null,
+    "purpose": null,
     "budget": null,
     "financing": null,
     "timeline": null,
@@ -101,16 +151,18 @@ RESPONSE FORMAT — return valid JSON only, no markdown fences:
   },
   "should_notify_owner": false,
   "handoff": false,
-  "handoff_reason": "photos_requested" | "bot_confused" | "customer_frustrated" | "human_requested" | "capability_limit" | null
+  "handoff_reason": "location_question" | "photos_requested" | "visit_intent" | "bot_confused" | "customer_frustrated" | "human_requested" | "capability_limit" | null
 }\
 """
 
 _OWNER_NUMBER = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
-_QUAL_FIELDS = ("budget", "financing", "timeline", "name")
+_QUAL_FIELDS = ("purpose", "financing", "timeline", "name")
 _READY_LEAD_SCORE = 3
 
 HANDOFF_REASONS = {
     "photos_requested":   "Cliente pidió fotos de los lotes",
+    "location_question":  "Cliente preguntó por ubicación exacta o cómo llegar",
+    "visit_intent":       "Cliente quiere coordinar una visita",
     "bot_confused":       "Bot no entendió la pregunta",
     "customer_frustrated":"Cliente parece frustrado o confundido",
     "human_requested":    "Cliente pidió hablar con una persona",
@@ -159,17 +211,36 @@ def _looks_repetitive(reply: str, history: list) -> bool:
 def _forced_handoff_reason(message: str, repetitive: bool = False) -> str | None:
     """Deterministically force handoff for high-risk/owner-needed scenarios."""
     msg = (message or "").lower()
-    # Photos/media requests should always move to owner live handling.
+
+    # Photos/media requests.
     if any(k in msg for k in (
         "foto", "fotos", "imagen", "imagenes", "imágenes", "video", "videos",
         "cómo se ve", "como se ve", "me puedes enviar", "me manda", "mándame", "mandame"
     )):
         return "photos_requested"
 
+    # Location / directions questions.
+    if any(k in msg for k in (
+        "ubicación exacta", "ubicacion exacta", "en el mapa", "dónde queda", "donde queda",
+        "cómo llego", "como llego", "exactamente dónde", "exactamente donde",
+        "dirección específica", "a lado de qué", "cerca de qué", "cómo se llega",
+        "como se llega", "dónde están", "donde estan", "dónde está", "donde esta el lote",
+        "pin", "coordenadas", "google maps", "maps", "ubicación del terreno"
+    )):
+        return "location_question"
+
+    # Visit intent confirmed.
+    if any(k in msg for k in (
+        "quiero verlo", "quiero visitarlo", "quiero ver el terreno", "cómo puedo visitarlo",
+        "como puedo visitarlo", "podemos visitar", "sí me interesa verlo", "si me interesa verlo",
+        "agendaría visita", "agendar visita", "quisiera ir", "cuando puedo ir", "cuándo puedo ir"
+    )):
+        return "visit_intent"
+
     # Explicit human request.
     if any(k in msg for k in (
         "hablar con alguien", "hablar con una persona", "una persona", "un humano",
-        "con el dueño", "con el asesor", "con un agente"
+        "con el dueño", "con el asesor", "con un agente", "me pueden llamar", "me llaman"
     )):
         return "human_requested"
 
@@ -288,6 +359,24 @@ def _extract_financing_from_message(message: str) -> str | None:
     return None
 
 
+def _extract_purpose_from_message(message: str) -> str | None:
+    msg = (message or "").lower()
+    if any(k in msg for k in (
+        "ambas", "ambos", "las dos", "los dos", "construir e invertir", "invertir y construir",
+        "para las dos", "para los dos"
+    )):
+        return "construir e invertir"
+    if any(k in msg for k in (
+        "construir", "casa", "vivienda", "residencia", "habitacion", "habitación"
+    )):
+        return "construir"
+    if any(k in msg for k in (
+        "invertir", "inversion", "inversión", "retorno", "valoriz", "vender", "negocio"
+    )):
+        return "invertir"
+    return None
+
+
 def _extract_timeline_from_message(message: str) -> str | None:
     msg = (message or "").lower()
     weekdays = (
@@ -321,9 +410,11 @@ def _has_visit_or_buy_intent(message: str) -> bool:
 
 def _compute_lead_score(extracted: dict, message: str) -> tuple[int, bool]:
     score = 0
-    if extracted.get("budget"):
-        score += 2
+    if extracted.get("purpose"):
+        score += 1
     if extracted.get("financing"):
+        score += 1
+    if extracted.get("budget"):
         score += 1
     if extracted.get("timeline"):
         score += 1
@@ -341,61 +432,50 @@ def _next_missing_field(extracted: dict) -> str | None:
 
 
 def _next_prompt_for_field(field: str, extracted: dict) -> str:
-    if field == "budget":
-        return "Perfecto. Para ayudarte mejor, ¿qué presupuesto tienes en mente para el lote?"
+    if field == "purpose":
+        return "¿Estás buscando el lote para construir, para invertir, o para ambas cosas?"
     if field == "financing":
-        return "Buenísimo. ¿Comprarías al contado o con financiamiento bancario?"
+        return "¿Estás pensando en pagar de contado o con financiamiento / préstamo bancario?"
     if field == "timeline":
-        return "Entendido. ¿Para cuándo te gustaría concretar compra o visita?"
+        return "¿Para cuándo te gustaría concretar la compra o visita?"
     if field == "name":
-        return "Excelente. Para continuar, ¿me compartes tu nombre?"
-    return "Cuéntame un poco más para ayudarte mejor."
+        return "¿Me compartes tu nombre para seguir en contacto?"
+    return "¿Tienes alguna otra pregunta o querés coordinar una visita?"
 
 
 def _progressive_followup_reply(message: str, extracted: dict) -> str:
     msg = (message or "").lower()
     if "constru" in msg:
         return (
-            "¡Excelente, para construir te puede funcionar muy bien! "
-            "Tenemos lotes de 600-700 m² con título de propiedad. "
-            "¿Qué presupuesto manejas y comprarías al contado o con banco?"
+            "¡Perfecto, para construir es una excelente opción! "
+            "Tenemos lotes de 600-700 m² con título de propiedad, agua, luz y vistas al río. "
+            "¿Estás pensando en pagar de contado o con financiamiento bancario?"
         )
     if "invers" in msg:
         return (
-            "Perfecto, como inversión es una zona con buen acceso en La Coloradita. "
+            "Perfecto como inversión — zona de buen acceso y valorización en La Peña, Santiago. "
             "Hoy tenemos 9 lotes disponibles desde $15,004. "
-            "¿Qué rango de presupuesto te gustaría evaluar?"
+            "¿Estás pensando en pagar de contado o con banco?"
         )
     if any(k in msg for k in ("cuanto", "cuánto", "precio", "precios", "costo", "cuesta")):
         return (
-            "Los lotes están entre $15,004 y $17,502 según metraje (600-700 m²). "
-            "Si quieres, te paso las mejores opciones según tu presupuesto."
+            "Los lotes están entre $15,004 y $17,502 según metraje (600-700 m², a $25/m²). "
+            "¿Los buscas para construir, para invertir, o para ambas cosas?"
         )
     if any(k in msg for k in ("agua", "luz", "electric", "internet", "servicio")):
         return (
-            "Sí: los lotes tienen agua y electricidad; internet aún no. "
-            "¿Te interesa más para construir pronto o para inversión?"
+            "Sí: los lotes tienen agua potable y electricidad; internet aún no. "
+            "¿Los buscas para construir o como inversión?"
         )
-    if extracted.get("budget") and not extracted.get("financing"):
-        return (
-            f"Perfecto, con {extracted.get('budget')} hay opciones para evaluar. "
-            "¿Comprarías al contado o con banco?"
-        )
-    if extracted.get("budget") and extracted.get("financing") and not extracted.get("timeline"):
-        return (
-            "Buenísimo, con esa información te puedo orientar mejor. "
-            "¿Para cuándo quisieras concretar compra o visita?"
-        )
-    if extracted.get("budget") and extracted.get("financing") and extracted.get("timeline") and not extracted.get("name"):
-        return "Perfecto. Si quieres, te comparto opciones y coordinamos visita. ¿Me compartes tu nombre?"
-
-    if not extracted.get("budget"):
-        return "Perfecto. Para orientarte mejor, ¿qué presupuesto tienes en mente para el lote?"
+    if extracted.get("purpose") and not extracted.get("financing"):
+        return "¿Estás pensando en pagar de contado o con financiamiento / préstamo bancario?"
+    if extracted.get("financing") and not extracted.get("timeline"):
+        return "¿Para cuándo te gustaría concretar la compra o visita?"
+    if not extracted.get("purpose"):
+        return "¿Estás buscando el lote para construir, para invertir, o para ambas cosas?"
     if not extracted.get("financing"):
-        return "Buenísimo. ¿Planeas comprar al contado o con financiamiento bancario?"
-    if not extracted.get("timeline"):
-        return "Entendido. ¿Para cuándo te gustaría concretar la compra?"
-    return "Excelente. ¿Quieres que coordinemos una visita o prefieres que te mande opciones por precio primero?"
+        return "¿Estás pensando en pagar de contado o con financiamiento / préstamo bancario?"
+    return "¿Tienes alguna otra pregunta o querés coordinar una visita?"
 
 
 def _start_live_handoff(number: str, extracted: dict, score: str, lead_score: int) -> None:
@@ -530,6 +610,7 @@ def send_owner_re_briefing(number: str, lead_data: dict) -> None:
         f"🏠 *Lead de terreno — {score_emoji} {score}*\n\n"
         f"Número: {number}\n"
         f"Nombre: {_fmt(extracted.get('name'), 'No proporcionado')}\n"
+        f"Propósito: {_fmt(extracted.get('purpose'))}\n"
         f"Presupuesto: {_fmt(extracted.get('budget'))}\n"
         f"Financiamiento: {_fmt(extracted.get('financing'))}\n"
         f"Timeline: {_fmt(extracted.get('timeline'))}\n"
@@ -564,11 +645,11 @@ def process_realestate_lead(number: str, message: str) -> None:
     conv = re_conversations.setdefault(number, {
         "history":         [],
         "intent_score":    "browsing",
-        "extracted":       {"name": None, "budget": None, "financing": None,
-                            "timeline": None, "specific_questions": []},
+        "extracted":       {"name": None, "purpose": None, "budget": None,
+                            "financing": None, "timeline": None, "specific_questions": []},
         "lead_score":      0,
         "last_notified_score": 0,
-        "qualification_stage": "collect_budget",
+        "qualification_stage": "collect_purpose",
         "live_handoff_started": False,
         "repeat_count": 0,
         "created_at":      now,
@@ -587,7 +668,7 @@ def process_realestate_lead(number: str, message: str) -> None:
         print(f"🏠 Live handoff guard (process_realestate_lead): forwarded from {number} to owner")
         return
     if persisted_profile:
-        for field in ("name", "budget", "financing", "timeline"):
+        for field in ("name", "purpose", "budget", "financing", "timeline"):
             if persisted_profile.get(field) and not conv["extracted"].get(field):
                 conv["extracted"][field] = persisted_profile[field]
 
@@ -627,7 +708,7 @@ def process_realestate_lead(number: str, message: str) -> None:
     if bot_handoff and not conv.get("state") == "live_handoff":
         # Merge what we have before briefing
         stored_pre = conv["extracted"]
-        for field in ("name", "budget", "financing", "timeline"):
+        for field in ("name", "purpose", "budget", "financing", "timeline"):
             if extracted.get(field):
                 stored_pre[field] = extracted[field]
         conv["history"].append({"role": "user", "content": message})
@@ -672,7 +753,7 @@ def process_realestate_lead(number: str, message: str) -> None:
 
     # Merge extracted fields — don't overwrite non-null with null
     stored = conv["extracted"]
-    for field in ("name", "budget", "financing", "timeline"):
+    for field in ("name", "purpose", "budget", "financing", "timeline"):
         if extracted.get(field):
             stored[field] = extracted[field]
     if extracted.get("specific_questions"):
@@ -683,10 +764,13 @@ def process_realestate_lead(number: str, message: str) -> None:
         stored["specific_questions"] = existing
 
     # Deterministic extraction to reduce misses on short WhatsApp follow-ups.
-    det_budget = _extract_budget_from_message(message)
+    det_purpose   = _extract_purpose_from_message(message)
+    det_budget    = _extract_budget_from_message(message)
     det_financing = _extract_financing_from_message(message)
-    det_timeline = _extract_timeline_from_message(message)
-    det_name = _extract_name_from_message(message)
+    det_timeline  = _extract_timeline_from_message(message)
+    det_name      = _extract_name_from_message(message)
+    if det_purpose:
+        stored["purpose"] = det_purpose
     if det_budget:
         stored["budget"] = det_budget
     if det_financing:
@@ -712,10 +796,6 @@ def process_realestate_lead(number: str, message: str) -> None:
         has_prior_assistant and _looks_generic_inventory_intro(reply)
     ):
         reply = _progressive_followup_reply(message, stored)
-
-    # Stage-machine guard: on follow-ups, always move to the next missing qualifier.
-    if has_prior_assistant and next_missing:
-        reply = _next_prompt_for_field(next_missing, stored)
 
     prev_score        = conv["intent_score"]
     conv["intent_score"] = score
