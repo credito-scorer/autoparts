@@ -263,10 +263,70 @@ SKEPTICISM_PHRASES = [
     "como se que es real", "es real", "existe", "es serio",
 ]
 
+PAYMENT_PHRASES = [
+    "modo de pago", "condición de pago", "condicion de pago",
+    "cómo se paga", "como se paga", "cuántos pagos", "cuantos pagos",
+    "forma de pago", "se puede financiar", "acepta efectivo",
+    "acepta financiamiento", "pago", "efectivo", "financiamiento",
+]
+
+Q1_ANSWERS = [
+    # construir variants
+    "construir", "casa", "para una casa", "construir una casa",
+    "para vivir", "para residencia", "vivir", "residencia",
+    "para construir",
+    # invertir variants
+    "invertir", "inversión", "inversion", "para invertir",
+    "como inversión", "como inversion",
+    # ambas variants
+    "ambas", "las dos", "para ambas", "ambas cosas",
+    "para ambas cosas", "los dos",
+]
+
+SIZE_PHRASES = [
+    "cuántos m2", "cuantos m2", "cuántos metros", "cuantos metros",
+    "de qué tamaño", "de que tamaño", "qué tamaño", "que tamaño",
+    "metros cuadrados", "el tamaño", "tamaño del lote",
+]
+
 
 def _is_skepticism(message: str) -> bool:
     msg = (message or "").lower().strip()
     return any(phrase in msg for phrase in SKEPTICISM_PHRASES)
+
+
+def _is_payment_question(message: str) -> bool:
+    msg = (message or "").lower().strip()
+    if not any(phrase in msg for phrase in PAYMENT_PHRASES):
+        return False
+    question_cues = (
+        "?", "como", "cómo", "cuanto", "cuánto", "cuantos", "cuántos",
+        "que", "qué", "se puede", "acepta", "modo", "forma", "condicion", "condición",
+    )
+    return any(cue in msg for cue in question_cues)
+
+
+def _is_q1_answer(message: str) -> bool:
+    msg = (message or "").lower().strip()
+    if not msg:
+        return False
+    # Keep this as a direct Q1 short-answer detector, not a broad classifier.
+    if any(ch.isdigit() for ch in msg):
+        return False
+    if _extract_budget_from_message(msg) or _extract_financing_from_message(msg) or _extract_timeline_from_message(msg):
+        return False
+    token_count = len(msg.split())
+    if token_count > 3:
+        return False
+    return any(msg == q or msg.startswith(q) for q in Q1_ANSWERS)
+
+
+def _is_size_question(message: str) -> bool:
+    msg = (message or "").lower().strip()
+    if not any(phrase in msg for phrase in SIZE_PHRASES):
+        return False
+    question_cues = ("?", "cuanto", "cuánto", "que", "qué", "de ", "tamaño", "metros", "m2")
+    return any(cue in msg for cue in question_cues)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -791,8 +851,17 @@ def process_realestate_lead(number: str, message: str) -> None:
     else:
         conv["repeat_count"] = 0
 
-    # Skepticism short-circuit: let Claude handle autonomously, never force handoff.
+    # Skepticism/payment/Q1/size short-circuit: let Claude handle autonomously, never force handoff.
     if _is_skepticism(message):
+        forced_reason = None
+        bot_handoff = False
+    elif _is_payment_question(message):
+        forced_reason = None
+        bot_handoff = False
+    elif conv.get("qualification_stage") == "collect_purpose" and _is_q1_answer(message):
+        forced_reason = None
+        bot_handoff = False
+    elif _is_size_question(message):
         forced_reason = None
         bot_handoff = False
     else:

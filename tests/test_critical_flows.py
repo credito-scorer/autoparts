@@ -762,6 +762,117 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertTrue(conv.get("live_handoff_started"))
         self.assertIn(customer, app_module.live_sessions)
 
+    def test_realestate_payment_question_short_circuits_forced_handoff(self):
+        customer = "+50760166661"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "purpose": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "qualification_stage": "collect_purpose",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "Puedes pagar al contado o con banco.",
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+            "handoff": True,
+            "handoff_reason": "customer_frustrated",
+        }), patch.object(re_module, "_forced_handoff_reason", return_value="human_requested") as forced_mock, \
+             patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "como se paga?")
+
+        forced_mock.assert_not_called()
+        briefing_mock.assert_not_called()
+        self.assertNotEqual(re_module.re_conversations[customer].get("state"), "live_handoff")
+
+    def test_realestate_q1_short_answer_short_circuits_forced_handoff(self):
+        customer = "+50760166662"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "purpose": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "qualification_stage": "collect_purpose",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "Perfecto, para construir.",
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+            "handoff": True,
+            "handoff_reason": "customer_frustrated",
+        }), patch.object(re_module, "_forced_handoff_reason", return_value="human_requested") as forced_mock, \
+             patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "construir")
+
+        forced_mock.assert_not_called()
+        briefing_mock.assert_not_called()
+        self.assertNotEqual(re_module.re_conversations[customer].get("state"), "live_handoff")
+
+    def test_realestate_size_question_short_circuits_forced_handoff(self):
+        customer = "+50760166663"
+        re_module.re_conversations[customer] = {
+            "history": [],
+            "intent_score": "browsing",
+            "extracted": {
+                "name": None,
+                "purpose": None,
+                "budget": None,
+                "financing": None,
+                "timeline": None,
+                "specific_questions": [],
+            },
+            "lead_score": 0,
+            "last_notified_score": 0,
+            "qualification_stage": "collect_purpose",
+            "live_handoff_started": False,
+            "created_at": datetime.now().isoformat(),
+            "last_message_at": datetime.now().isoformat(),
+        }
+
+        with patch.object(re_module, "qualify_lead", return_value={
+            "reply": "Los lotes tienen entre 600 y 700 m2.",
+            "intent_score": "considering",
+            "extracted": {},
+            "should_notify_owner": False,
+            "handoff": True,
+            "handoff_reason": "customer_frustrated",
+        }), patch.object(re_module, "_forced_handoff_reason", return_value="human_requested") as forced_mock, \
+             patch.object(re_module, "send_owner_re_briefing") as briefing_mock, \
+             patch.object(re_module, "send_whatsapp", return_value="sid_text"):
+            re_module.process_realestate_lead(customer, "cuantos m2 tiene?")
+
+        forced_mock.assert_not_called()
+        briefing_mock.assert_not_called()
+        self.assertNotEqual(re_module.re_conversations[customer].get("state"), "live_handoff")
+
     def test_re_live_handoff_resolves_main_module_instance(self):
         fake_runtime = types.SimpleNamespace(
             live_sessions={},
