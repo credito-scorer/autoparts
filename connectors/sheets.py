@@ -1,5 +1,7 @@
 import os
 import json
+from datetime import datetime, timezone
+
 import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
@@ -40,6 +42,55 @@ def get_stores_sheet():
         ws = spreadsheet.add_worksheet(title="Stores", rows=100, cols=6)
         ws.append_row(["number", "name", "contact", "specialty", "tier", "active"])
         return ws
+
+
+def get_aggregation_leads_sheet():
+    """Return the aggregation_leads worksheet, creating it with headers if missing."""
+    client = get_client()
+    spreadsheet = client.open_by_key(os.getenv("GOOGLE_SHEETS_ID"))
+    try:
+        return spreadsheet.worksheet("aggregation_leads")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title="aggregation_leads", rows=200, cols=10)
+        ws.append_row([
+            "timestamp",
+            "phone_number",
+            "product_interest",
+            "source",
+            "city",
+            "selling_channel",
+            "estimated_volume",
+            "status",
+            "notes",
+        ])
+        return ws
+
+
+def log_aggregation_lead(
+    phone_number: str,
+    product_interest: str,
+    *,
+    source: str = "facebook_ad",
+    status: str = "live_handoff",
+) -> None:
+    """Append one row to aggregation_leads (manual columns left blank)."""
+    try:
+        ws = get_aggregation_leads_sheet()
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        ws.append_row([
+            ts,
+            phone_number,
+            product_interest,
+            source,
+            "",
+            "",
+            "",
+            status,
+            "",
+        ])
+    except Exception as e:
+        print(f"⚠️ log_aggregation_lead failed: {e}")
+
 
 def search_supplier_sheet(sheet_id: str, parsed: dict) -> dict | None:
     try:

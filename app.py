@@ -25,7 +25,7 @@ from agent.responder import (
 from agent.luis import consult_luis
 from utils.logger import log_request, log_event
 from utils.dashboard import render_dashboard
-from connectors.sheets import get_order_log
+from connectors.sheets import get_order_log, log_aggregation_lead
 from utils.followup import (
     cancel_followup,
     cancel_long_wait_alert,
@@ -74,6 +74,7 @@ owner_briefing_context = {}   # customer_number → {parsed, raw_message}
 pending_quotes         = {}   # customer_number → {description, price, lead_time, parsed, raw_message}
 pending_urgency        = {}   # customer_number → {queue, raw_message, attempts}
 live_sessions          = {}
+aggregation_sessions    = {}  # demand aggregation vertical (Facebook ad → wholesale sellers)
 pending_live_offers    = {}
 seller_sessions           = {}
 active_seller_sessions    = set()   # seller numbers with an active forward in progress
@@ -555,6 +556,76 @@ def _is_vertical_conv_stale(conv: dict, ttl_seconds: int = 86400) -> bool:
     except Exception:
         return False
     return (time.time() - last_ts) > ttl_seconds
+
+
+# ── Demand aggregation vertical (Facebook ad CTA → Zeli sources wholesale) ─────
+
+AGGREGATION_TRIGGERS = [
+    "quiero vender", "quiero empezar a vender", "quiero iniciar",
+    "quiero comenzar a vender", "me interesa vender",
+    "busco productos para vender", "como puedo vender",
+    "cómo puedo vender", "quiero un negocio", "quiero emprender",
+]
+
+
+def is_aggregation_lead(message: str) -> bool:
+    msg = (message or "").lower().strip()
+    return any(trigger in msg for trigger in AGGREGATION_TRIGGERS)
+
+
+def _aggregation_entry_allowed(number: str) -> bool:
+    """Do not start aggregation if another active vertical already owns this thread."""
+    re_c = _re_conversations.get(number)
+    if re_c and not _is_vertical_conv_stale(re_c):
+        return False
+    ex_c = _exploratory_conversations.get(number)
+    if ex_c and not _is_vertical_conv_stale(ex_c):
+        return False
+    return True
+
+
+def _handle_aggregation_greeting(incoming_number: str) -> None:
+    now = datetime.now().isoformat()
+    with _state_lock:
+        aggregation_sessions[incoming_number] = {
+            "state": "awaiting_product",
+            "timestamp": now,
+        }
+    send_whatsapp(
+        incoming_number,
+        "¡Hola! 👋 Somos *Zeli* — te ayudamos a conseguir productos al por mayor "
+        "para que tú los vendas.\n\n"
+        "¿Qué producto o tipo de producto te gustaría vender?",
+    )
+
+
+def _handle_aggregation_product(incoming_number: str, incoming_message: str, owner_number: str) -> None:
+    product_interest = (incoming_message or "").strip() or "—"
+    log_aggregation_lead(incoming_number, product_interest)
+    send_whatsapp(
+        incoming_number,
+        "¡Buena elección! 🔥 Déjame revisar disponibilidad y opciones para ti. Un momento...",
+    )
+    if owner_number:
+        body = (
+            f"🟢 *Nuevo lead de agregación*\n"
+            f"Número: {incoming_number}\n"
+            f"Quiere vender: {product_interest}\n\n"
+            f"_Responde a este mensaje para hablarle directamente._"
+        )
+        msg_sid = send_whatsapp(owner_number, body)
+        if msg_sid:
+            with _state_lock:
+                escalation_message_map[msg_sid] = incoming_number
+                live_sessions[incoming_number] = True
+    now = datetime.now().isoformat()
+    with _state_lock:
+        aggregation_sessions[incoming_number] = {
+            "state": "live",
+            "timestamp": now,
+            "product_interest": product_interest,
+        }
+    print(f"🟢 Aggregation handoff → live for {incoming_number}")
 
 
 # ── Escalation helper ──────────────────────────────────────────────────────────
@@ -1677,6 +1748,7 @@ def _webhook_handler():
             if incoming_message.strip().lower() == "fin":
                 with _state_lock:
                     live_sessions.pop(customer_number, None)
+                    aggregation_sessions.pop(customer_number, None)
                 try:
                     convo = get_conversation(customer_number) or {}
                     re_profile = dict((convo.get("re_profile") or {}))
@@ -1825,6 +1897,30 @@ def _webhook_handler():
             daemon=True,
         )
         thread.start()
+        return jsonify({"status": "ok"}), 200
+
+    # 3.6 AGGREGATION (demand) — Facebook ad CTA; greet → product → live handoff
+    with _state_lock:
+        _agg = aggregation_sessions.get(incoming_number)
+    if _agg:
+        _agg_state = _agg.get("state")
+        if _agg_state == "awaiting_product":
+            _handle_aggregation_product(incoming_number, incoming_message, owner_number)
+            return jsonify({"status": "ok"}), 200
+        if _agg_state == "live":
+            if owner_number:
+                msg_sid = send_whatsapp(
+                    owner_number,
+                    f"💬 *{incoming_number}:*\n{incoming_message}",
+                )
+                if msg_sid:
+                    with _state_lock:
+                        escalation_message_map[msg_sid] = incoming_number
+                        live_sessions[incoming_number] = True
+            return jsonify({"status": "ok"}), 200
+
+    if is_aggregation_lead(incoming_message) and _aggregation_entry_allowed(incoming_number):
+        _handle_aggregation_greeting(incoming_number)
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer

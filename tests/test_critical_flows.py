@@ -35,6 +35,7 @@ class CriticalFlowTests(unittest.TestCase):
             app_module.approval_message_map.clear()
             app_module.processing_messages.clear()
             app_module._startup_notified = False
+            app_module.aggregation_sessions.clear()
         app_module._re_conversations.clear()
         app_module._exploratory_conversations.clear()
         conversation_store.clear_all()
@@ -199,6 +200,80 @@ class CriticalFlowTests(unittest.TestCase):
         owner_briefing_mock.assert_called_once()
         self.assertTrue(customer in app_module.live_sessions)
         self.assertFalse(any("¿En qué plazo la necesitas?" in msg for _, msg in sent_messages))
+
+    def test_aggregation_flow_greeting_then_handoff(self):
+        customer = "+50760188888"
+        owner_digits = "50764794106"
+
+        def _make_payload(msg_id: str, body: str):
+            return {
+                "entry": [{
+                    "changes": [{
+                        "value": {
+                            "messages": [{
+                                "id": msg_id,
+                                "from": customer.replace("+", ""),
+                                "type": "text",
+                                "text": {"body": body},
+                            }]
+                        }
+                    }]
+                }]
+            }
+
+        sent = []
+
+        def _fake_send(to, msg):
+            sent.append((to, msg))
+            return f"sid_agg_{len(sent)}"
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": owner_digits}, clear=False), \
+             patch.object(app_module, "log_aggregation_lead") as log_mock, \
+             patch.object(app_module, "send_whatsapp", side_effect=_fake_send):
+            client = app_module.app.test_client()
+            raw1 = json.dumps(_make_payload("wamid.agg.1", "Hola, quiero vender"), separators=(",", ":")).encode()
+            sig1 = "sha256=" + hmac.new(
+                os.environ["META_APP_SECRET"].encode(), raw1, hashlib.sha256
+            ).hexdigest()
+            r1 = client.post(
+                "/webhook",
+                data=raw1,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig1,
+                },
+            )
+            self.assertEqual(r1.status_code, 200)
+            self.assertEqual(
+                app_module.aggregation_sessions[customer]["state"],
+                "awaiting_product",
+            )
+
+            raw2 = json.dumps(_make_payload("wamid.agg.2", "ropa por mayor"), separators=(",", ":")).encode()
+            sig2 = "sha256=" + hmac.new(
+                os.environ["META_APP_SECRET"].encode(), raw2, hashlib.sha256
+            ).hexdigest()
+            r2 = client.post(
+                "/webhook",
+                data=raw2,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig2,
+                },
+            )
+            self.assertEqual(r2.status_code, 200)
+
+        log_mock.assert_called_once_with(customer, "ropa por mayor")
+        self.assertIn(customer, app_module.live_sessions)
+        self.assertEqual(app_module.aggregation_sessions[customer]["state"], "live")
+        self.assertIn(customer, app_module.escalation_message_map.values())
+        owner_plus = "+" + owner_digits
+        self.assertTrue(
+            any("Nuevo lead de agregación" in m for t, m in sent if t == owner_plus)
+        )
+        self.assertTrue(
+            any("productos al por mayor" in m.lower() for t, m in sent if t == customer)
+        )
 
     def test_active_re_conversation_bypasses_classifier(self):
         customer = "+50760005555"
