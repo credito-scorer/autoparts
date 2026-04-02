@@ -73,6 +73,7 @@ owner_briefing_map     = {}   # outbound briefing SID → customer_number
 owner_briefing_context = {}   # customer_number → {parsed, raw_message}
 pending_quotes         = {}   # customer_number → {description, price, lead_time, parsed, raw_message}
 pending_urgency        = {}   # customer_number → {queue, raw_message, attempts}
+GLOBAL_LIVE_MODE       = True
 live_sessions          = {}
 aggregation_sessions    = {}  # demand aggregation vertical (Facebook ad → wholesale sellers)
 pending_live_offers    = {}
@@ -1971,6 +1972,37 @@ def _webhook_handler():
 
     if is_aggregation_lead(incoming_message) and _aggregation_entry_allowed(incoming_number):
         _handle_aggregation_greeting(incoming_number, incoming_message)
+        return jsonify({"status": "ok"}), 200
+
+    # GLOBAL_LIVE_MODE override — intercepts all customer messages before any bot flow
+    if GLOBAL_LIVE_MODE:
+        with _state_lock:
+            _glm_already_live = incoming_number in live_sessions
+        if _glm_already_live:
+            # Already active — forward message to owner
+            if owner_number:
+                _glm_sid = send_whatsapp(
+                    owner_number,
+                    f"💬 *{incoming_number}:*\n{incoming_message}"
+                )
+                if _glm_sid:
+                    with _state_lock:
+                        escalation_message_map[_glm_sid] = incoming_number
+        else:
+            # New conversation — activate live session and notify owner
+            with _state_lock:
+                live_sessions[incoming_number] = True
+            if owner_number:
+                _glm_sid = send_whatsapp(
+                    owner_number,
+                    f"🟢 *Nuevo mensaje*\n"
+                    f"Número: {incoming_number}\n"
+                    f"Mensaje: \"{incoming_message}\"\n\n"
+                    f"_Responde a este mensaje para hablarle directamente._"
+                )
+                if _glm_sid:
+                    with _state_lock:
+                        escalation_message_map[_glm_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
     # 3.7 GLOBAL LIVE MODE (temporary): greet and hand off every regular customer.
