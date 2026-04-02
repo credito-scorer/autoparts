@@ -244,10 +244,7 @@ class CriticalFlowTests(unittest.TestCase):
                 },
             )
             self.assertEqual(r1.status_code, 200)
-            self.assertEqual(
-                app_module.aggregation_sessions[customer]["state"],
-                "awaiting_product",
-            )
+            self.assertEqual(app_module.aggregation_sessions[customer]["state"], "live")
 
             raw2 = json.dumps(_make_payload("wamid.agg.2", "ropa por mayor"), separators=(",", ":")).encode()
             sig2 = "sha256=" + hmac.new(
@@ -263,7 +260,7 @@ class CriticalFlowTests(unittest.TestCase):
             )
             self.assertEqual(r2.status_code, 200)
 
-        log_mock.assert_called_once_with(customer, "ropa por mayor")
+        log_mock.assert_called_once_with(customer, "Hola, quiero vender")
         self.assertIn(customer, app_module.live_sessions)
         self.assertEqual(app_module.aggregation_sessions[customer]["state"], "live")
         self.assertIn(customer, app_module.escalation_message_map.values())
@@ -273,6 +270,10 @@ class CriticalFlowTests(unittest.TestCase):
         )
         self.assertTrue(
             any("productos al por mayor" in m.lower() for t, m in sent if t == customer)
+        )
+        # Second message should be forwarded to owner as live conversation.
+        self.assertTrue(
+            any("ropa por mayor" in m for t, m in sent if t == owner_plus)
         )
 
     def test_active_re_conversation_bypasses_classifier(self):

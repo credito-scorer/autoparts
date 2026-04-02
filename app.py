@@ -584,19 +584,41 @@ def _aggregation_entry_allowed(number: str) -> bool:
     return True
 
 
-def _handle_aggregation_greeting(incoming_number: str) -> None:
+def _handle_aggregation_greeting(incoming_number: str, incoming_message: str) -> None:
     now = datetime.now().isoformat()
     with _state_lock:
         aggregation_sessions[incoming_number] = {
-            "state": "awaiting_product",
+            "state": "live",
             "timestamp": now,
+            "product_interest": (incoming_message or "").strip() or "—",
         }
+    product_interest = aggregation_sessions[incoming_number]["product_interest"]
+    log_aggregation_lead(incoming_number, product_interest)
+
     send_whatsapp(
         incoming_number,
         "¡Hola! 👋 Somos *Zeli* — te ayudamos a conseguir productos al por mayor "
-        "para que tú los vendas.\n\n"
-        "¿Qué producto o tipo de producto te gustaría vender?",
+        "para que tú los vendas.\n\nUn momento...",
     )
+
+    owner_raw = os.getenv("YOUR_PERSONAL_WHATSAPP", "") or ""
+    owner_digits = re.sub(r"\D", "", owner_raw)
+    owner_number = f"+{owner_digits}" if owner_digits else ""
+    if owner_number:
+        body = (
+            f"🟢 *Nuevo lead de agregación*\n"
+            f"Número: {incoming_number}\n"
+            f"Quiere vender: {product_interest}\n\n"
+            f"_Responde a este mensaje para hablarle directamente._"
+        )
+        msg_sid = send_whatsapp(owner_number, body)
+        if msg_sid:
+            with _state_lock:
+                escalation_message_map[msg_sid] = incoming_number
+                live_sessions[incoming_number] = True
+    else:
+        with _state_lock:
+            live_sessions[incoming_number] = True
 
 
 def _handle_aggregation_product(incoming_number: str, incoming_message: str, owner_number: str) -> None:
@@ -1920,7 +1942,7 @@ def _webhook_handler():
             return jsonify({"status": "ok"}), 200
 
     if is_aggregation_lead(incoming_message) and _aggregation_entry_allowed(incoming_number):
-        _handle_aggregation_greeting(incoming_number)
+        _handle_aggregation_greeting(incoming_number, incoming_message)
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer
