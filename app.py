@@ -709,6 +709,34 @@ def _start_live_mode_after_confirmation(customer_number: str) -> None:
                     escalation_message_map[msg_sid] = customer_number
 
 
+def _start_immediate_live_mode(number: str, incoming_message: str, owner_number: str) -> None:
+    """Force immediate live routing for regular customer messages."""
+    with _state_lock:
+        already_live = number in live_sessions
+        live_sessions[number] = True
+
+    if already_live:
+        return
+
+    send_whatsapp(
+        number,
+        "¡Hola! 👋 Gracias por escribir a Zeli. "
+        "En un momento te atiende alguien del equipo.",
+    )
+    if owner_number:
+        msg_sid = send_whatsapp(
+            owner_number,
+            f"🔴 *Sesión en vivo iniciada*\n"
+            f"Cliente: {number}\n"
+            f"Mensaje: \"{incoming_message}\"\n\n"
+            f"_Responde a este mensaje para hablarle directamente. "
+            f"Escribe *fin* para terminar la sesión._"
+        )
+        if msg_sid:
+            with _state_lock:
+                escalation_message_map[msg_sid] = number
+
+
 # ── Missing-fields prompt ──────────────────────────────────────────────────────
 
 def _send_queue_missing_prompt(number: str, message: str, conv: dict) -> None:
@@ -1943,6 +1971,13 @@ def _webhook_handler():
 
     if is_aggregation_lead(incoming_message) and _aggregation_entry_allowed(incoming_number):
         _handle_aggregation_greeting(incoming_number, incoming_message)
+        return jsonify({"status": "ok"}), 200
+
+    # 3.7 GLOBAL LIVE MODE (temporary): greet and hand off every regular customer.
+    with _state_lock:
+        _already_live = incoming_number in live_sessions
+    if not _already_live:
+        _start_immediate_live_mode(incoming_number, incoming_message, owner_number)
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer

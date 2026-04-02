@@ -276,6 +276,56 @@ class CriticalFlowTests(unittest.TestCase):
             any("ropa por mayor" in m for t, m in sent if t == owner_plus)
         )
 
+    def test_new_customer_immediately_enters_live_mode(self):
+        customer = "+50760199999"
+        owner_digits = "50764794106"
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.instant.live",
+                            "from": customer.replace("+", ""),
+                            "type": "text",
+                            "text": {"body": "hola"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        sent = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent.append((to, msg))
+            return f"sid_live_{len(sent)}"
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": owner_digits}, clear=False), \
+             patch.object(app_module, "send_whatsapp", side_effect=_fake_send_whatsapp), \
+             patch.object(app_module, "classify_intent", return_value="social") as classify_mock:
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(customer, app_module.live_sessions)
+        self.assertTrue(any(t == customer and "Gracias por escribir a Zeli" in m for t, m in sent))
+        owner_plus = "+" + owner_digits
+        self.assertTrue(any(t == owner_plus and "Sesión en vivo iniciada" in m for t, m in sent))
+        self.assertIn(customer, app_module.escalation_message_map.values())
+        classify_mock.assert_not_called()
+
     def test_active_re_conversation_bypasses_classifier(self):
         customer = "+50760005555"
         app_module._re_conversations[customer] = {
