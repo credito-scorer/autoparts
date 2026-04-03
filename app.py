@@ -1546,6 +1546,37 @@ def _webhook_handler():
                 escalation_message_map[fwd_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
+    # GLOBAL_LIVE_MODE override — must run before ALL vertical/beta checks
+    if GLOBAL_LIVE_MODE and incoming_normalized != owner_number.replace("+", ""):
+        with _state_lock:
+            _glm_already_live = incoming_number in live_sessions
+        if _glm_already_live:
+            # Already active — forward message to owner
+            if owner_number:
+                _glm_sid = send_whatsapp(
+                    owner_number,
+                    f"💬 *{incoming_number}:*\n{incoming_message}"
+                )
+                if _glm_sid:
+                    with _state_lock:
+                        escalation_message_map[_glm_sid] = incoming_number
+        else:
+            # New conversation — activate live session and notify owner
+            with _state_lock:
+                live_sessions[incoming_number] = True
+            if owner_number:
+                _glm_sid = send_whatsapp(
+                    owner_number,
+                    f"🟢 *Nuevo mensaje*\n"
+                    f"Número: {incoming_number}\n"
+                    f"Mensaje: \"{incoming_message}\"\n\n"
+                    f"_Responde a este mensaje para hablarle directamente._"
+                )
+                if _glm_sid:
+                    with _state_lock:
+                        escalation_message_map[_glm_sid] = incoming_number
+        return jsonify({"status": "ok"}), 200
+
     # 1.6 CUSTOMER BETA → whitelist-gated live relay to owner
     if is_customer_beta(incoming_number):
         with _state_lock:
@@ -1931,37 +1962,6 @@ def _webhook_handler():
             )
             if fwd_sid:
                 escalation_message_map[fwd_sid] = incoming_number
-        return jsonify({"status": "ok"}), 200
-
-    # GLOBAL_LIVE_MODE override — intercepts all customer messages before any bot flow
-    if GLOBAL_LIVE_MODE:
-        with _state_lock:
-            _glm_already_live = incoming_number in live_sessions
-        if _glm_already_live:
-            # Already active — forward message to owner
-            if owner_number:
-                _glm_sid = send_whatsapp(
-                    owner_number,
-                    f"💬 *{incoming_number}:*\n{incoming_message}"
-                )
-                if _glm_sid:
-                    with _state_lock:
-                        escalation_message_map[_glm_sid] = incoming_number
-        else:
-            # New conversation — activate live session and notify owner
-            with _state_lock:
-                live_sessions[incoming_number] = True
-            if owner_number:
-                _glm_sid = send_whatsapp(
-                    owner_number,
-                    f"🟢 *Nuevo mensaje*\n"
-                    f"Número: {incoming_number}\n"
-                    f"Mensaje: \"{incoming_message}\"\n\n"
-                    f"_Responde a este mensaje para hablarle directamente._"
-                )
-                if _glm_sid:
-                    with _state_lock:
-                        escalation_message_map[_glm_sid] = incoming_number
         return jsonify({"status": "ok"}), 200
 
     # 3. LOCAL STORE → forward message to owner, never treat as customer
