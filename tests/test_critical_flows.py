@@ -228,6 +228,7 @@ class CriticalFlowTests(unittest.TestCase):
             return f"sid_agg_{len(sent)}"
 
         with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": owner_digits}, clear=False), \
+             patch.object(app_module, "GLOBAL_LIVE_MODE", False), \
              patch.object(app_module, "log_aggregation_lead") as log_mock, \
              patch.object(app_module, "send_whatsapp", side_effect=_fake_send):
             client = app_module.app.test_client()
@@ -320,9 +321,10 @@ class CriticalFlowTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertIn(customer, app_module.live_sessions)
-        self.assertTrue(any(t == customer and "Gracias por escribir a Zeli" in m for t, m in sent))
+        # Global live mode should notify owner only; no automated customer reply.
+        self.assertFalse(any(t == customer for t, _ in sent))
         owner_plus = "+" + owner_digits
-        self.assertTrue(any(t == owner_plus and "Sesión en vivo iniciada" in m for t, m in sent))
+        self.assertTrue(any(t == owner_plus and "Nuevo mensaje" in m for t, m in sent))
         self.assertIn(customer, app_module.escalation_message_map.values())
         classify_mock.assert_not_called()
 

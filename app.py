@@ -712,30 +712,45 @@ def _start_live_mode_after_confirmation(customer_number: str) -> None:
 
 def _start_immediate_live_mode(number: str, incoming_message: str, owner_number: str) -> None:
     """Force immediate live routing for regular customer messages."""
+    print(f"🔴 GLOBAL_LIVE_MODE entry: number={number} owner_number={owner_number!r}")
     with _state_lock:
         already_live = number in live_sessions
         live_sessions[number] = True
 
     if already_live:
+        print(f"🔴 GLOBAL_LIVE_MODE skip: already live for {number}")
         return
 
-    send_whatsapp(
-        number,
-        "¡Hola! 👋 Gracias por escribir a Zeli. "
-        "En un momento te atiende alguien del equipo.",
-    )
-    if owner_number:
-        msg_sid = send_whatsapp(
-            owner_number,
-            f"🔴 *Sesión en vivo iniciada*\n"
-            f"Cliente: {number}\n"
-            f"Mensaje: \"{incoming_message}\"\n\n"
-            f"_Responde a este mensaje para hablarle directamente. "
-            f"Escribe *fin* para terminar la sesión._"
+    print(f"🔴 GLOBAL_LIVE_MODE set live_sessions[{number}]=True")
+    # Temporary behavior currently includes greeting customer on first message.
+    try:
+        send_whatsapp(
+            number,
+            "¡Hola! 👋 Gracias por escribir a Zeli. "
+            "En un momento te atiende alguien del equipo.",
         )
-        if msg_sid:
-            with _state_lock:
-                escalation_message_map[msg_sid] = number
+    except Exception as e:
+        print(f"🔴 GLOBAL_LIVE_MODE customer greet failed for {number}: {e}")
+
+    if owner_number:
+        print(f"🔴 Sending owner notification for {number}")
+        try:
+            msg_sid = send_whatsapp(
+                owner_number,
+                f"🔴 *Sesión en vivo iniciada*\n"
+                f"Cliente: {number}\n"
+                f"Mensaje: \"{incoming_message}\"\n\n"
+                f"_Responde a este mensaje para hablarle directamente. "
+                f"Escribe *fin* para terminar la sesión._"
+            )
+            print(f"🔴 Owner notification sent: SID={msg_sid}")
+            if msg_sid:
+                with _state_lock:
+                    escalation_message_map[msg_sid] = number
+        except Exception as e:
+            print(f"🔴 SEND FAILED: {e}")
+    else:
+        print("🔴 GLOBAL_LIVE_MODE owner_number missing/empty; cannot notify owner")
 
 
 # ── Missing-fields prompt ──────────────────────────────────────────────────────
@@ -1498,7 +1513,8 @@ def _webhook_handler():
     print(f"🔍 WEBHOOK ENTRY: from='{incoming_number}' body='{incoming_message}'")
     print(f"\n📨 Message from {incoming_number}: {incoming_message}")
 
-    owner_number        = os.getenv("YOUR_PERSONAL_WHATSAPP", "").replace("whatsapp:", "").replace("+", "").strip()
+    owner_raw           = os.getenv("YOUR_PERSONAL_WHATSAPP", "")
+    owner_number        = owner_raw.replace("whatsapp:", "").replace("+", "").strip()
     owner_number        = "+" + owner_number
     incoming_normalized = incoming_number.replace("+", "").strip()
 
@@ -1547,34 +1563,53 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # GLOBAL_LIVE_MODE override — must run before ALL vertical/beta checks
+    print(f"🔴 GLOBAL_LIVE_MODE check: {GLOBAL_LIVE_MODE}, number: {incoming_number}")
     if GLOBAL_LIVE_MODE and incoming_normalized != owner_number.replace("+", ""):
+        print(
+            f"🔴 GLOBAL_LIVE_MODE owner env raw={owner_raw!r} normalized={owner_number!r} "
+            f"twilio_like={owner_raw.startswith('whatsapp:')}"
+        )
         with _state_lock:
             _glm_already_live = incoming_number in live_sessions
+        print(f"🔴 GLOBAL_LIVE_MODE state: already_live={_glm_already_live}")
         if _glm_already_live:
             # Already active — forward message to owner
             if owner_number:
-                _glm_sid = send_whatsapp(
-                    owner_number,
-                    f"💬 *{incoming_number}:*\n{incoming_message}"
-                )
-                if _glm_sid:
-                    with _state_lock:
-                        escalation_message_map[_glm_sid] = incoming_number
+                print(f"🔴 Sending owner notification for {incoming_number} (existing live)")
+                try:
+                    _glm_sid = send_whatsapp(
+                        owner_number,
+                        f"💬 *{incoming_number}:*\n{incoming_message}"
+                    )
+                    print(f"🔴 Owner notification sent: SID={_glm_sid}")
+                    if _glm_sid:
+                        with _state_lock:
+                            escalation_message_map[_glm_sid] = incoming_number
+                except Exception as e:
+                    print(f"🔴 SEND FAILED: {e}")
         else:
             # New conversation — activate live session and notify owner
             with _state_lock:
                 live_sessions[incoming_number] = True
+            print(f"🔴 GLOBAL_LIVE_MODE activated: live_sessions[{incoming_number}] = True")
             if owner_number:
-                _glm_sid = send_whatsapp(
-                    owner_number,
-                    f"🟢 *Nuevo mensaje*\n"
-                    f"Número: {incoming_number}\n"
-                    f"Mensaje: \"{incoming_message}\"\n\n"
-                    f"_Responde a este mensaje para hablarle directamente._"
-                )
-                if _glm_sid:
-                    with _state_lock:
-                        escalation_message_map[_glm_sid] = incoming_number
+                print(f"🔴 Sending owner notification for {incoming_number}")
+                try:
+                    _glm_sid = send_whatsapp(
+                        owner_number,
+                        f"🟢 *Nuevo mensaje*\n"
+                        f"Número: {incoming_number}\n"
+                        f"Mensaje: \"{incoming_message}\"\n\n"
+                        f"_Responde a este mensaje para hablarle directamente._"
+                    )
+                    print(f"🔴 Owner notification sent: SID={_glm_sid}")
+                    if _glm_sid:
+                        with _state_lock:
+                            escalation_message_map[_glm_sid] = incoming_number
+                except Exception as e:
+                    print(f"🔴 SEND FAILED: {e}")
+            else:
+                print("🔴 GLOBAL_LIVE_MODE owner number missing after normalization")
         return jsonify({"status": "ok"}), 200
 
     # 1.6 CUSTOMER BETA → whitelist-gated live relay to owner
@@ -1926,7 +1961,9 @@ def _webhook_handler():
     registered_suppliers = get_registered_suppliers()
     supplier_numbers     = [s["number"] for s in registered_suppliers]
 
+    print(f"🔴 PATH TRACE pre-supplier check for {incoming_number}")
     if incoming_number in supplier_numbers:
+        print(f"🔴 PATH TRACE supplier branch hit for {incoming_number}")
         result = handle_supplier_response(
             incoming_number, incoming_message,
             replied_to_sid=replied_to_sid if replied_to_sid else None
@@ -1965,13 +2002,16 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 3. LOCAL STORE → forward message to owner, never treat as customer
+    print(f"🔴 PATH TRACE pre-store check for {incoming_number}")
     if incoming_number in get_store_numbers():
+        print(f"🔴 PATH TRACE store branch hit for {incoming_number}")
         handle_store_message(incoming_number, incoming_message)
         return jsonify({"status": "ok"}), 200
 
     # 3.5 BETA DISCOVERY MODE → handle before any regular customer/session routing
     print(f"🔍 BETA CHECK: '{incoming_number}' | whitelist: {get_beta_whitelist()}")
     if is_beta_user(incoming_number):
+        print(f"🔴 PATH TRACE beta branch hit for {incoming_number}")
         print(f"🧪 Beta route active for {incoming_number}")
         thread = threading.Thread(
             target=handle_beta_message,
@@ -1982,10 +2022,12 @@ def _webhook_handler():
         return jsonify({"status": "ok"}), 200
 
     # 3.6 AGGREGATION (demand) — Facebook ad CTA; greet → product → live handoff
+    print(f"🔴 PATH TRACE pre-aggregation state check for {incoming_number}")
     with _state_lock:
         _agg = aggregation_sessions.get(incoming_number)
     if _agg:
         _agg_state = _agg.get("state")
+        print(f"🔴 PATH TRACE aggregation state hit: {_agg_state} for {incoming_number}")
         if _agg_state == "awaiting_product":
             _handle_aggregation_product(incoming_number, incoming_message, owner_number)
             return jsonify({"status": "ok"}), 200
@@ -2002,14 +2044,8 @@ def _webhook_handler():
             return jsonify({"status": "ok"}), 200
 
     if is_aggregation_lead(incoming_message) and _aggregation_entry_allowed(incoming_number):
+        print(f"🔴 PATH TRACE aggregation trigger hit for {incoming_number}")
         _handle_aggregation_greeting(incoming_number, incoming_message)
-        return jsonify({"status": "ok"}), 200
-
-    # 3.7 GLOBAL LIVE MODE (temporary): greet and hand off every regular customer.
-    with _state_lock:
-        _already_live = incoming_number in live_sessions
-    if not _already_live:
-        _start_immediate_live_mode(incoming_number, incoming_message, owner_number)
         return jsonify({"status": "ok"}), 200
 
     # 4. PENDING LIVE OFFER → customer responding to live session offer
