@@ -130,6 +130,57 @@ class CriticalFlowTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(sent_texts, [])
 
+    def test_fin_live_session_closing_message_is_not_autoparts_specific(self):
+        owner_number = "50764794106"
+        customer = "+50763622248"
+        reply_sid = "wamid.live.reply.1"
+        sent_texts = []
+
+        def _fake_send_whatsapp(to, msg):
+            sent_texts.append((to, msg))
+            return "sid_text"
+
+        with app_module._state_lock:
+            app_module.live_sessions[customer] = True
+            app_module.escalation_message_map[reply_sid] = customer
+
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.test.fin.live",
+                            "from": owner_number,
+                            "type": "text",
+                            "context": {"id": reply_sid},
+                            "text": {"body": "fin"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        sig = "sha256=" + hmac.new(
+            os.environ["META_APP_SECRET"].encode(), raw, hashlib.sha256
+        ).hexdigest()
+
+        with patch.dict(os.environ, {"YOUR_PERSONAL_WHATSAPP": owner_number}, clear=False), \
+             patch.object(app_module, "send_whatsapp", side_effect=_fake_send_whatsapp):
+            client = app_module.app.test_client()
+            resp = client.post(
+                "/webhook",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        customer_msgs = [m for t, m in sent_texts if t == customer]
+        self.assertTrue(customer_msgs)
+        self.assertNotIn("Pieza + marca + modelo + año", customer_msgs[-1])
+
     def test_startup_notification_sends_once(self):
         sent = []
 

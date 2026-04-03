@@ -1879,8 +1879,7 @@ def _webhook_handler():
                     pass
                 send_whatsapp(
                     customer_number,
-                    "Fue un gusto atenderte. Si necesitas algo más, aquí estamos. 👋\n\n"
-                    "Para buscar un repuesto: Pieza + marca + modelo + año"
+                    "Fue un gusto atenderte. Si necesitas algo más, aquí estamos. 👋"
                 )
                 print(f"🟢 Live session ended for {customer_number}")
                 send_whatsapp(owner_number, f"✅ Sesión terminada. Bot activo para {customer_number}.")
@@ -2075,8 +2074,7 @@ def _webhook_handler():
         else:
             send_whatsapp(
                 incoming_number,
-                "Entendido, aquí estamos si necesitas algo. "
-                "Para buscar un repuesto envíanos: Pieza + marca + modelo + año"
+                "Entendido, aquí estamos si necesitas algo. 👋"
             )
         return jsonify({"status": "ok"}), 200
 
